@@ -92,7 +92,7 @@ class ZeaburBot:
         self.push_day = os.environ.get("WXAGENT_PUSH_DAY", "mon")
         self.push_hour = int(os.environ.get("WXAGENT_PUSH_HOUR", "9"))
         self.push_minute = int(os.environ.get("WXAGENT_PUSH_MINUTE", "0"))
-        self.api_base = os.environ.get("API_BASE_URL", "https://dsedj-parent-academy-bot.zeabur.app")
+        self.api_base = os.environ.get("API_BASE_URL", "https://portal.dsedj.gov.mo")
 
         Path(self.data_dir).mkdir(parents=True, exist_ok=True)
 
