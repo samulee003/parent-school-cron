@@ -1,0 +1,23 @@
+# Zeabur 部署配置
+# 複製此文件到 Zeabur Console 的 Environment Variables 頁面
+# 或通過 Zeabur CLI 部署
+
+# 企業微信群機器人 Webhook URL
+# 在企業微信群 -> 添加群機器人 -> 複製 Webhook URL
+WECOM_WEBHOOK_URL: ""
+
+# 推送時間（UTC+8 澳門時間）
+WXAGENT_PUSH_DAY: "mon"       # 星期: mon/tue/wed/thu/fri/sat/sun
+WXAGENT_PUSH_HOUR: "9"        # 小時: 0-23
+WXAGENT_PUSH_MINUTE: "0"      # 分鐘: 0-59
+
+# 數據存儲
+WXAGENT_DATA_DIR: "/app/data"
+
+# Cron Job Secret（防止未授權調用）
+CRON_SECRET: "your_random_secret_key_here"
+
+# 日誌級別
+WXAGENT_LOG_LEVEL: "INFO"
+
+# Zeabur 會自動設置 PORT 環境變量

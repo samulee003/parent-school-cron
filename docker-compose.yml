@@ -1,0 +1,25 @@
+version: "3.8"
+
+services:
+  parent-academy-bot:
+    build: .
+    container_name: parent-academy-bot
+    restart: unless-stopped
+    volumes:
+      - ./data:/app/data
+    environment:
+      - WXAGENT_DATA_DIR=/app/data
+      - WXAGENT_LOG_LEVEL=INFO
+      - WXAGENT_PUSH_DAY=mon
+      - WXAGENT_PUSH_HOUR=9
+      - WXAGENT_PUSH_MINUTE=0
+      # Wechaty puppet 設置
+      - WECHATY_PUPPET=wechaty-puppet-wechat
+      # 如需 padlocal 協議（更穩定），設置以下環境變量：
+      # - WECHATY_PUPPET=wechaty-puppet-padlocal
+      # - WECHATY_PUPPET_PADLOCAL_TOKEN=your_token
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
