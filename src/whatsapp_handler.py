@@ -90,6 +90,15 @@ def get_deepseek_model() -> str:
     return os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-flash")
 
 
+def get_deepseek_daily_limit_per_user() -> int:
+    raw_limit = os.environ.get("DEEPSEEK_DAILY_LIMIT_PER_USER", "12")
+    try:
+        return max(int(raw_limit), 0)
+    except ValueError:
+        logger.warning("DEEPSEEK_DAILY_LIMIT_PER_USER 無效，使用預設值 12")
+        return 12
+
+
 def is_valid_meta_signature(payload: bytes, signature_header: str, app_secret: str) -> bool:
     """驗證 Meta Webhook 的 X-Hub-Signature-256。"""
     if not payload or not signature_header or not app_secret:
@@ -617,7 +626,7 @@ class WhatsAppHandler:
             logger.exception(f"獲取課程失敗: {e}")
             return "課程資料獲取失敗，請稍後再試。"
 
-    def _course_summary_for_llm(self, course: Any, number: int) -> Dict[str, str]:
+    def _course_summary_for_llm(self, course: Any, number: int) -> Dict[str, Any]:
         return {
             "number": str(number),
             "name": self._course_value(course, "name"),
@@ -629,6 +638,26 @@ class WhatsAppHandler:
             "status": self._course_value(course, "status"),
             "detail_url": self._course_value(course, "detail_url"),
         }
+
+    def _llm_cache_key(
+        self,
+        user_text: str,
+        profile: Dict[str, Any],
+        candidate_payload: List[Dict[str, Any]],
+    ) -> str:
+        payload = {
+            "v": 1,
+            "model": get_deepseek_model(),
+            "message": self._normalize_command(user_text),
+            "profile": {
+                "age_groups": self._profile_age_groups(profile),
+                "target": profile.get("target", ""),
+                "topic": profile.get("topic", ""),
+            },
+            "candidates": candidate_payload,
+        }
+        raw = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
     def _available_age_summary(self, courses: List[Any]) -> str:
         counts: Dict[str, int] = {}
@@ -752,6 +781,22 @@ class WhatsAppHandler:
                 self._course_summary_for_llm(course, i)
                 for i, course in enumerate(candidates, 1)
             ]
+            cache_key = self._llm_cache_key(user_text, profile, candidate_payload)
+            cached_reply = self._memory.get_llm_cached_response(cache_key)
+            if cached_reply:
+                logger.info("DeepSeek 快取命中 from=%s", from_number)
+                return cached_reply
+
+            daily_limit = get_deepseek_daily_limit_per_user()
+            if not self._memory.try_consume_llm_quota(from_number, daily_limit):
+                logger.info(
+                    "DeepSeek 每日限額已達 from=%s usage=%s limit=%s",
+                    from_number,
+                    self._memory.get_llm_usage_count(from_number),
+                    daily_limit,
+                )
+                return None
+
             messages = [
                 {
                     "role": "system",
@@ -782,7 +827,10 @@ class WhatsAppHandler:
                     ),
                 },
             ]
-            return self._call_deepseek(messages)
+            reply = self._call_deepseek(messages)
+            if reply:
+                self._memory.save_llm_cached_response(cache_key, reply)
+            return reply
         except Exception as e:
             logger.warning("LLM 推薦建立失敗: %s", e)
             return None
