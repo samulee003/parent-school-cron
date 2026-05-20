@@ -897,8 +897,12 @@ class WhatsAppHandler:
                 messages = value.get("messages", [])
 
                 for msg in messages:
+                    msg_id = msg.get("id", "")
                     msg_type = msg.get("type")
                     from_number = msg.get("from")
+                    if msg_id and not self._memory.claim_message(msg_id, from_number or ""):
+                        logger.info("略過已處理 WhatsApp 訊息: %s", msg_id)
+                        continue
 
                     if msg_type == "text":
                         text_body = msg.get("text", {}).get("body", "")

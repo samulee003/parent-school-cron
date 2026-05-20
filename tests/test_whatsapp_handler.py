@@ -430,6 +430,35 @@ class WhatsAppHandlerTests(unittest.TestCase):
         self.assertIn("嬰幼繪本氹氹轉", sent[0][1])
         self.assertIn("為什麼推薦", sent[0][1])
 
+    def test_duplicate_whatsapp_message_id_is_processed_once(self):
+        handler, sent = self.make_handler()
+        payload = {
+            "entry": [
+                {
+                    "changes": [
+                        {
+                            "value": {
+                                "messages": [
+                                    {
+                                        "id": "wamid.test-1",
+                                        "type": "text",
+                                        "from": "85360000000",
+                                        "text": {"body": "小朋友1歲，想親子活動"},
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                }
+            ]
+        }
+
+        handler.handle_webhook(payload)
+        handler.handle_webhook(payload)
+
+        self.assertEqual(len(sent), 1)
+        self.assertIn("嬰幼繪本氹氹轉", sent[0][1])
+
     def test_detail_request_returns_link_for_visible_course(self):
         handler, sent = self.make_handler()
 

@@ -42,6 +42,15 @@ class WhatsAppMemoryStore:
                     )
                     """
                 )
+                conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS processed_whatsapp_messages (
+                        message_id TEXT PRIMARY KEY,
+                        phone TEXT NOT NULL DEFAULT '',
+                        created_at TEXT NOT NULL
+                    )
+                    """
+                )
                 conn.commit()
 
     def get_profile(self, phone: str) -> Dict[str, Any]:
@@ -86,6 +95,29 @@ class WhatsAppMemoryStore:
                     (phone, now, now),
                 )
                 conn.commit()
+
+    def claim_message(self, message_id: str, phone: str = "") -> bool:
+        """Return True only for the first time a WhatsApp message id is seen."""
+        if not message_id:
+            return True
+
+        now = datetime.now().isoformat()
+        with self._lock:
+            with closing(sqlite3.connect(str(self.db_path))) as conn:
+                try:
+                    conn.execute(
+                        """
+                        INSERT INTO processed_whatsapp_messages (
+                            message_id, phone, created_at
+                        )
+                        VALUES (?, ?, ?)
+                        """,
+                        (message_id, phone, now),
+                    )
+                    conn.commit()
+                    return True
+                except sqlite3.IntegrityError:
+                    return False
 
     def _get_json(self, phone: str, column: str) -> Dict[str, Any]:
         if column not in {"profile_json", "last_query_json"}:
