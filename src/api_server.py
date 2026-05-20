@@ -22,12 +22,14 @@ from bot_webhook import ZeaburBot
 from wecom_cs_handler import CSMessageHandler
 from wecom_crypto import WeComCrypto
 from wecom_poller import WeComPoller
+from whatsapp_handler import WhatsAppHandler, is_configured as wa_is_configured
 
 # 全局實例
 bot: Optional[ZeaburBot] = None
 cs_handler: Optional[CSMessageHandler] = None
 cs_crypto: Optional[WeComCrypto] = None
 poller: Optional[WeComPoller] = None
+wa_handler: Optional[WhatsAppHandler] = None
 
 
 def get_bot() -> ZeaburBot:
@@ -59,6 +61,18 @@ def get_cs_crypto() -> Optional[WeComCrypto]:
     return cs_crypto
 
 
+def get_wa_handler() -> Optional[WhatsAppHandler]:
+    """獲取 WhatsApp 處理器"""
+    global wa_handler
+    if wa_handler is None and wa_is_configured():
+        try:
+            wa_handler = WhatsAppHandler()
+            logger.info("WhatsApp handler 初始化成功")
+        except Exception as e:
+            logger.warning(f"WhatsApp handler 初始化失敗: {e}")
+    return wa_handler
+
+
 # ============== Pydantic 模型 ==============
 
 class WeComCallback(BaseModel):
@@ -88,8 +102,8 @@ class StatusResponse(BaseModel):
 
 app = FastAPI(
     title="家長學堂課程推送 Bot",
-    description="Zeabur 部署的企業微信客服課程推送服務",
-    version="2.2.0",
+    description="Zeabur 部署的企業微信 + WhatsApp 課程推送服務",
+    version="2.3.0",
 )
 
 
@@ -127,7 +141,11 @@ async def root():
     return {
         "status": "ok",
         "service": "家長學堂課程推送 Bot",
-        "version": "2.2.0",
+        "version": "2.3.0",
+        "channels": {
+            "wecom_cs": bool(get_cs_handler().api) if get_cs_handler() else False,
+            "whatsapp": wa_is_configured(),
+        },
         "time": datetime.now().isoformat(),
     }
 
@@ -144,6 +162,7 @@ async def health():
     }
     if poller:
         result["poller"] = poller.get_status()
+    result["whatsapp"] = wa_is_configured()
     return result
 
 
@@ -317,6 +336,50 @@ async def wecom_cs_callback(
         logger.exception(f"事件處理失敗: {e}")
         # 即使處理失敗，也返回 success，避免企業微信重試
         return PlainTextResponse(content="success")
+
+
+# ============== WhatsApp Webhook ==============
+
+@app.get("/api/whatsapp/webhook")
+async def whatsapp_webhook_verify(
+    hub_mode: str = Query(..., alias="hub.mode"),
+    hub_verify_token: str = Query(..., alias="hub.verify_token"),
+    hub_challenge: str = Query(..., alias="hub.challenge"),
+):
+    """
+    WhatsApp webhook 驗證（GET）
+
+    Meta 配置 webhook callback URL 時發送 GET 請求驗證
+    """
+    from whatsapp_handler import WhatsAppHandler
+    result = WhatsAppHandler.verify_challenge(hub_mode, hub_verify_token, hub_challenge)
+    if result is not None:
+        logger.info("WhatsApp webhook 驗證成功")
+        return PlainTextResponse(content=result)
+    else:
+        logger.warning("WhatsApp webhook 驗證失敗")
+        raise HTTPException(status_code=403, detail="Verification failed")
+
+
+@app.post("/api/whatsapp/webhook")
+async def whatsapp_webhook(request: Request):
+    """
+    WhatsApp 消息接收（POST）
+
+    接收家長發來的消息，處理後回覆課程資訊
+    """
+    handler = get_wa_handler()
+    if not handler:
+        logger.warning("WhatsApp 未配置，忽略 webhook")
+        return PlainTextResponse(content="ok")
+
+    try:
+        data = await request.json()
+        handler.handle_webhook(data)
+        return PlainTextResponse(content="ok")
+    except Exception as e:
+        logger.exception(f"WhatsApp webhook 處理失敗: {e}")
+        return PlainTextResponse(content="ok")
 
 
 # ============== 啟動 ==============
