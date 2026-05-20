@@ -1,32 +1,37 @@
 {
   "name": "parent-school-cron",
-  "description": "家長學堂課程推送 Bot — 企業微信客服",
+  "description": "家長學堂 WhatsApp 課程查詢 Bot",
   "type": "python",
   "main": "src/api_server.py",
   "env": [
     {
-      "key": "WECOM_CORP_ID",
-      "description": "企業微信 CorpID",
+      "key": "WHATSAPP_PHONE_NUMBER_ID",
+      "description": "WhatsApp Phone Number ID",
       "required": true
     },
     {
-      "key": "WECOM_CS_SECRET",
-      "description": "微信客服應用 Secret",
+      "key": "WHATSAPP_ACCESS_TOKEN",
+      "description": "WhatsApp Permanent Access Token",
       "required": true
     },
     {
-      "key": "WECOM_TOKEN",
-      "description": "回調 Token",
+      "key": "WHATSAPP_VERIFY_TOKEN",
+      "description": "Meta Webhook Verify Token",
       "required": true
     },
     {
-      "key": "WECOM_ENCODING_AES_KEY",
-      "description": "EncodingAESKey (43字符)",
+      "key": "WHATSAPP_APP_SECRET",
+      "description": "Meta App Secret for webhook signature verification",
       "required": true
     },
     {
       "key": "CRON_SECRET",
-      "description": "Cron 觸發密鑰",
+      "description": "Cron endpoint secret",
+      "required": true
+    },
+    {
+      "key": "ADMIN_SECRET",
+      "description": "Admin endpoint secret",
       "required": true
     }
   ]

@@ -6,15 +6,26 @@
 
 import logging
 import os
-from typing import Optional, List, Dict
+import hashlib
+import hmac
+from typing import Optional, List, Dict, Any
 import requests
 
 from bot_webhook import ZeaburBot
+from scraper import AGE_GROUP_LABELS
 
 logger = logging.getLogger("whatsapp_handler")
 
 # WhatsApp Cloud API 配置
 GRAPH_API_BASE = "https://graph.facebook.com/v20.0"
+
+
+AGE_KEYWORDS = {
+    "0-2歲": ("0-2", "0至2", "0到2", "嬰兒", "嬰幼", "寶寶", "bb"),
+    "3-6歲": ("3-6", "3至6", "3到6", "幼兒", "幼稚園", "幼兒園"),
+    "7-12歲": ("7-12", "7至12", "7到12", "小學", "小學生", "兒童"),
+    "13-18歲": ("13-18", "13至18", "13到18", "中學", "中學生", "青少年"),
+}
 
 
 def get_phone_number_id() -> str:
@@ -30,6 +41,36 @@ def get_access_token() -> str:
 def get_verify_token() -> str:
     """從環境變量獲取 Webhook Verify Token"""
     return os.environ.get("WHATSAPP_VERIFY_TOKEN", "")
+
+
+def is_valid_meta_signature(payload: bytes, signature_header: str, app_secret: str) -> bool:
+    """驗證 Meta Webhook 的 X-Hub-Signature-256。"""
+    if not payload or not signature_header or not app_secret:
+        return False
+
+    prefix = "sha256="
+    if not signature_header.startswith(prefix):
+        return False
+
+    expected = hmac.new(
+        app_secret.encode("utf-8"),
+        payload,
+        hashlib.sha256,
+    ).hexdigest()
+    received = signature_header[len(prefix):]
+    return hmac.compare_digest(expected, received)
+
+
+def detect_age_group(text: str) -> Optional[str]:
+    """從用戶文字中找出年齡層。"""
+    text_lower = text.strip().lower().replace("岁", "歲")
+    for age in AGE_GROUP_LABELS:
+        if age.lower() in text_lower:
+            return age
+    for age, keywords in AGE_KEYWORDS.items():
+        if any(keyword.lower() in text_lower for keyword in keywords):
+            return age
+    return None
 
 
 class WhatsAppHandler:
@@ -81,25 +122,50 @@ class WhatsAppHandler:
             logger.exception(f"發送消息異常: {e}")
             return False
 
-    def _get_courses_text(self) -> str:
+    @staticmethod
+    def _course_value(course: Any, attr: str, fallback: str = "") -> str:
+        """同時支援 Course dataclass 與 dict，避免來源轉換時炸掉。"""
+        if isinstance(course, dict):
+            return str(course.get(attr, fallback) or fallback)
+        return str(getattr(course, attr, fallback) or fallback)
+
+    def _get_courses_text(self, age_group: str = "") -> str:
         """獲取課程列表文字"""
         bot = self._get_bot()
         if not bot or not bot.crawler:
             return "課程資料暫時無法取得，請稍後再試。"
 
         try:
-            courses = bot.crawler.scrape()
-            if not courses:
-                return "目前沒有找到課程資訊，請稍後再查詢。"
+            courses = bot.crawler.fetch_all_open_courses(max_retries=2, delay=1.0)
+            if age_group:
+                courses = [
+                    c for c in courses
+                    if self._course_value(c, "age_group") == age_group
+                ]
 
-            lines = ["📚 *澳門家長學堂最新課程*"]
+            if not courses:
+                if age_group:
+                    label = AGE_GROUP_LABELS.get(age_group, age_group)
+                    return f"目前沒有找到 {label}（{age_group}）的報名中課程，請稍後再查詢。"
+                return "目前沒有找到報名中課程，請稍後再查詢。"
+
+            if age_group:
+                label = AGE_GROUP_LABELS.get(age_group, age_group)
+                lines = [f"📚 *澳門家長學堂 {label}（{age_group}）課程*"]
+            else:
+                lines = ["📚 *澳門家長學堂最新課程*"]
             for i, c in enumerate(courses[:5], 1):
-                title = c.get("title", "未命名課程")
-                date_str = c.get("date", "")
-                link = c.get("link", "")
+                title = self._course_value(c, "name", "未命名課程")
+                date_str = self._course_value(c, "date")
+                topic = self._course_value(c, "topic")
+                target = self._course_value(c, "target")
+                link = self._course_value(c, "detail_url")
                 lines.append(f"\n*{i}. {title}*")
                 if date_str:
                     lines.append(f"📅 {date_str}")
+                tags = " | ".join([v for v in [topic, target] if v])
+                if tags:
+                    lines.append(f"🏷️ {tags}")
                 if link:
                     lines.append(f"🔗 {link}")
 
@@ -117,7 +183,10 @@ class WhatsAppHandler:
         logger.info(f"收到消息 from={from_number}: {text}")
 
         # 關鍵詞匹配
-        if any(k in text_lower for k in ["課程", "course", "最新"]):
+        age_group = detect_age_group(text)
+        if age_group:
+            reply = self._get_courses_text(age_group=age_group)
+        elif any(k in text_lower for k in ["課程", "course", "最新"]):
             reply = self._get_courses_text()
         elif any(k in text_lower for k in ["報名", "報名表", "報名連結"]):
             reply = (

@@ -1,14 +1,18 @@
-## Zeabur Deployment
-- Project ID: 6a0d3e3433d1a635fa37e4c5
-- Service ID: 6a0d3e4433d1a635fa37e4c9
-- Environment ID: 6a0d3e34f3b70f2a79fbd851
-- Server: Tencent Tokyo 2C 2GB
-- Domain: https://parent-school-bot.zeabur.app
-- Callback URL: https://parent-school-bot.zeabur.app/api/wecom-cs/callback
-- GitHub: https://github.com/samulee003/parent-school-cron.git
+# Project Notes
 
-## WeCom Config
-- CorpID: ww9f72e51ed2bf6492
-- AgentId: 1000004 (家長學堂BOT)
-- Token: 7O7wMST_opJb6wcK4hFLJNLCdupKjlpvEUt6H8ogzAM
-- TODO: WECOM_ENCODING_AES_KEY 需從企業微信後台生成後設置
+- Current product direction: WhatsApp-first MVP.
+- Main service entry: `src/api_server.py`.
+- Deploy target: Zeabur or any container host exposing `PORT` (default `8000`).
+- Do not commit real tokens, secrets, service IDs, phone IDs, or webhook URLs.
+- Legacy WeCom modules remain in `src/` for reference, but new work should prefer WhatsApp unless the user explicitly asks otherwise.
+
+## Required Runtime Secrets
+
+Use environment variables only:
+
+- `WHATSAPP_PHONE_NUMBER_ID`
+- `WHATSAPP_ACCESS_TOKEN`
+- `WHATSAPP_VERIFY_TOKEN`
+- `WHATSAPP_APP_SECRET`
+- `CRON_SECRET`
+- `ADMIN_SECRET`

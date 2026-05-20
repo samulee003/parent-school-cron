@@ -1,40 +1,45 @@
 {
   "schema_version": "1.0",
-  "name": "家長學堂課程推送 Bot",
-  "description": "自動抓取澳門家長學堂課程，按年齡層推送到企業微信群",
+  "name": "家長學堂 WhatsApp Bot",
+  "description": "自動抓取澳門家長學堂課程，透過 WhatsApp 回覆家長查詢",
   "icon": "📚",
   "templates": ["Dockerfile"],
   "port": 8000,
   "env": {
-    "WECOM_WEBHOOK_URL": {
-      "description": "企業微信群機器人 Webhook URL",
+    "WHATSAPP_PHONE_NUMBER_ID": {
+      "description": "WhatsApp Phone Number ID",
       "required": true,
       "type": "string"
     },
-    "WXAGENT_PUSH_DAY": {
-      "description": "推送星期 (mon/tue/wed/thu/fri/sat/sun)",
-      "default": "mon",
-      "required": false
+    "WHATSAPP_ACCESS_TOKEN": {
+      "description": "WhatsApp Permanent Access Token",
+      "required": true,
+      "type": "password"
     },
-    "WXAGENT_PUSH_HOUR": {
-      "description": "推送小時 (0-23)",
-      "default": "9",
-      "required": false
+    "WHATSAPP_VERIFY_TOKEN": {
+      "description": "Meta Webhook Verify Token",
+      "required": true,
+      "type": "password"
     },
-    "WXAGENT_PUSH_MINUTE": {
-      "description": "推送分鐘 (0-59)",
-      "default": "0",
-      "required": false
+    "WHATSAPP_APP_SECRET": {
+      "description": "Meta App Secret",
+      "required": true,
+      "type": "password"
     },
     "CRON_SECRET": {
-      "description": "Cron 接口密鑰（防止未授權調用）",
+      "description": "Cron endpoint secret",
       "required": true,
-      "type": "string"
+      "type": "password"
+    },
+    "ADMIN_SECRET": {
+      "description": "Admin endpoint secret",
+      "required": true,
+      "type": "password"
     }
   },
   "cron": {
-    "description": "每週一早上自動推送課程",
-    "schedule": "0 9 * * 1",
+    "description": "Optional weekly course refresh",
+    "schedule": "0 1 * * 1",
     "endpoint": "/api/cron?secret=${CRON_SECRET}"
   }
 }

@@ -10,6 +10,7 @@
 """
 
 import hashlib
+import os
 import struct
 import base64
 import xml.etree.ElementTree as ET
@@ -17,11 +18,9 @@ from flask import Flask, request, abort
 
 app = Flask(__name__)
 
-# ============ 在這裡填入企業微信後台生成的值 ============
-TOKEN = "AAwq7Am51jvodmz3WwSozH7P"
-ENCODING_AES_KEY = "WOdLD3uDhgr66Z7gwejrqwBHJE2r2oX7fTwuOJcrM2h"
-CORP_ID = "ww9f72e51ed2bf6492"
-# ========================================================
+TOKEN = os.environ.get("WECOM_TOKEN", "")
+ENCODING_AES_KEY = os.environ.get("WECOM_ENCODING_AES_KEY", "")
+CORP_ID = os.environ.get("WECOM_CORP_ID", "")
 
 
 class WeComCallback:
@@ -93,7 +92,9 @@ if __name__ == "__main__":
     print("企業微信回調驗證伺服器")
     print(f"監聯端口: http://localhost:8888/wecom-callback")
     print("")
-    print("請確保已修改 TOKEN、ENCODING_AES_KEY、CORP_ID")
+    print("請先設定 WECOM_TOKEN、WECOM_ENCODING_AES_KEY、WECOM_CORP_ID")
     print("然後用 cloudflared tunnel --url http://localhost:8888")
     print("=" * 50)
+    if not TOKEN or not ENCODING_AES_KEY or not CORP_ID:
+        raise SystemExit("缺少 WeCom 環境變數，已停止。")
     app.run(host="0.0.0.0", port=8888)

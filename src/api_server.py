@@ -6,6 +6,7 @@
 import logging
 import os
 import sys
+import json
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Optional
@@ -22,7 +23,7 @@ from bot_webhook import ZeaburBot
 from wecom_cs_handler import CSMessageHandler
 from wecom_crypto import WeComCrypto
 from wecom_poller import WeComPoller
-from whatsapp_handler import WhatsAppHandler, is_configured as wa_is_configured
+from whatsapp_handler import WhatsAppHandler, is_configured as wa_is_configured, is_valid_meta_signature
 
 # 全局實例
 bot: Optional[ZeaburBot] = None
@@ -73,6 +74,22 @@ def get_wa_handler() -> Optional[WhatsAppHandler]:
     return wa_handler
 
 
+def require_secret(provided: str, env_keys: tuple[str, ...], label: str) -> None:
+    """檢查管理/排程接口密鑰。"""
+    expected = ""
+    for key in env_keys:
+        expected = os.environ.get(key, "")
+        if expected:
+            break
+
+    if not expected:
+        logger.error("%s secret 未配置", label)
+        raise HTTPException(status_code=500, detail=f"{label} secret not configured")
+
+    if provided != expected:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+
 # ============== Pydantic 模型 ==============
 
 class WeComCallback(BaseModel):
@@ -103,7 +120,7 @@ class StatusResponse(BaseModel):
 app = FastAPI(
     title="家長學堂課程推送 Bot",
     description="Zeabur 部署的企業微信 + WhatsApp 課程推送服務",
-    version="2.3.0",
+    version="3.0.0",
 )
 
 
@@ -141,7 +158,8 @@ async def root():
     return {
         "status": "ok",
         "service": "家長學堂課程推送 Bot",
-        "version": "2.3.0",
+        "version": "3.0.0",
+        "primary_channel": "whatsapp",
         "channels": {
             "wecom_cs": bool(get_cs_handler().api) if get_cs_handler() else False,
             "whatsapp": wa_is_configured(),
@@ -180,8 +198,9 @@ async def api_status():
 
 
 @app.post("/api/push", response_model=PushResponse)
-async def api_push(background_tasks: BackgroundTasks):
+async def api_push(background_tasks: BackgroundTasks, secret: str = ""):
     """手動觸發推送"""
+    require_secret(secret, ("ADMIN_SECRET", "CRON_SECRET"), "Admin")
     b = get_bot()
     result = b.run_push()
     return PushResponse(
@@ -226,9 +245,7 @@ async def api_cron(secret: str = ""):
     需在 URL 中帶 secret 參數防止未授權調用
     如: /api/cron?secret=your_secret_key
     """
-    expected = os.environ.get("CRON_SECRET", "")
-    if expected and secret != expected:
-        raise HTTPException(status_code=401, detail="Unauthorized")
+    require_secret(secret, ("CRON_SECRET",), "Cron")
 
     b = get_bot()
     result = b.run_push()
@@ -236,8 +253,9 @@ async def api_cron(secret: str = ""):
 
 
 @app.get("/api/users")
-async def api_users():
+async def api_users(secret: str = ""):
     """獲取用戶列表（管理員接口）"""
+    require_secret(secret, ("ADMIN_SECRET", "CRON_SECRET"), "Admin")
     b = get_bot()
     users = b.store.get_active_users()
     return {
@@ -368,15 +386,27 @@ async def whatsapp_webhook(request: Request):
 
     接收家長發來的消息，處理後回覆課程資訊
     """
-    handler = get_wa_handler()
-    if not handler:
-        logger.warning("WhatsApp 未配置，忽略 webhook")
-        return PlainTextResponse(content="ok")
-
     try:
-        data = await request.json()
+        body = await request.body()
+        app_secret = os.environ.get("WHATSAPP_APP_SECRET", "")
+        if app_secret and not is_valid_meta_signature(
+            body,
+            request.headers.get("x-hub-signature-256", ""),
+            app_secret,
+        ):
+            logger.warning("WhatsApp webhook 簽名驗證失敗")
+            raise HTTPException(status_code=403, detail="Invalid signature")
+
+        handler = get_wa_handler()
+        if not handler:
+            logger.warning("WhatsApp 未配置，忽略 webhook")
+            return PlainTextResponse(content="ok")
+
+        data = json.loads(body.decode("utf-8") or "{}")
         handler.handle_webhook(data)
         return PlainTextResponse(content="ok")
+    except HTTPException:
+        raise
     except Exception as e:
         logger.exception(f"WhatsApp webhook 處理失敗: {e}")
         return PlainTextResponse(content="ok")
