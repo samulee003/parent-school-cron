@@ -15,6 +15,7 @@ import requests
 
 from bot_webhook import ZeaburBot
 from scraper import AGE_GROUP_LABELS, TOPICS, TARGETS
+from whatsapp_memory import WhatsAppMemoryStore
 
 logger = logging.getLogger("whatsapp_handler")
 
@@ -34,9 +35,14 @@ AGE_KEYWORDS = {
 }
 
 PAGE_SIZE = 3
-NEXT_PAGE_KEYWORDS = {"更多", "下一頁", "下頁", "還有嗎", "還有沒有", "還有", "more", "next"}
+NEXT_PAGE_KEYWORDS = {
+    "更多", "下一頁", "下頁", "還有嗎", "還有沒有", "還有",
+    "有其他嗎", "還有別的嗎", "再來", "繼續", "more", "next",
+}
 ALL_COURSE_KEYWORDS = {"全部課程", "全部", "all"}
 RESET_KEYWORDS = {"重設", "重新設定", "reset"}
+PROFILE_KEYWORDS = {"我的偏好", "偏好", "設定", "狀態", "profile"}
+NEGATION_WORDS = ("不要", "不用", "不想", "不是", "唔要", "唔係", "排除", "非")
 
 
 def get_phone_number_id() -> str:
@@ -114,6 +120,43 @@ def detect_child_age_group(text: str) -> Optional[str]:
     return None
 
 
+def detect_child_age_groups(text: str) -> List[str]:
+    """從自然語句抓多個孩子年齡，例如「4歲和13歲」。"""
+    text_lower = text.strip().lower().replace("岁", "歲")
+    groups: List[str] = []
+    for match in re.finditer(r"(\d+(?:\.\d+)?)\s*歲", text_lower):
+        age = float(match.group(1))
+        group = ""
+        if 0 <= age < 3:
+            group = "0-2歲"
+        elif 3 <= age < 7:
+            group = "3-6歲"
+        elif 7 <= age < 13:
+            group = "7-12歲"
+        elif 13 <= age <= 18:
+            group = "13-18歲"
+        if group and group not in groups:
+            groups.append(group)
+    return groups
+
+
+def detect_age_groups(text: str) -> List[str]:
+    """從文字中找出所有年齡層線索。"""
+    text_lower = text.strip().lower().replace("岁", "歲")
+    groups = detect_child_age_groups(text_lower)
+
+    for age in AGE_GROUP_LABELS:
+        if age.lower() in text_lower and age not in groups:
+            groups.append(age)
+
+    for age, keywords in AGE_KEYWORDS.items():
+        if any(keyword.lower() in text_lower for keyword in keywords):
+            if age not in groups:
+                groups.append(age)
+
+    return groups
+
+
 def detect_target(text: str) -> str:
     text_normalized = text.strip()
     for target in TARGETS:
@@ -133,13 +176,14 @@ def detect_topic(text: str) -> str:
 class WhatsAppHandler:
     """WhatsApp Cloud API 消息處理器"""
 
-    def __init__(self):
+    def __init__(self, memory_store: Optional[WhatsAppMemoryStore] = None):
         self.phone_number_id = get_phone_number_id()
         self.access_token = get_access_token()
         self.api_url = f"{get_graph_api_base()}/{self.phone_number_id}/messages"
         self._bot: Optional[ZeaburBot] = None
         self._last_queries: Dict[str, Dict[str, Any]] = {}
-        self._profiles: Dict[str, Dict[str, str]] = {}
+        self._profiles: Dict[str, Dict[str, Any]] = {}
+        self._memory = memory_store or WhatsAppMemoryStore()
 
     def _get_bot(self) -> Optional[ZeaburBot]:
         """惰性初始化課程查詢 bot"""
@@ -235,11 +279,45 @@ class WhatsAppHandler:
         return normalized in ALL_COURSE_KEYWORDS
 
     @staticmethod
-    def _query_title(age_group: str = "", target: str = "", topic: str = "") -> str:
-        filters = []
+    def _normalize_age_groups(age_group: Any = "") -> List[str]:
+        if isinstance(age_group, list):
+            return [str(a) for a in age_group if a]
         if age_group:
-            label = AGE_GROUP_LABELS.get(age_group, age_group)
-            filters.append(f"{label}（{age_group}）")
+            return [str(age_group)]
+        return []
+
+    def _profile_age_groups(self, profile: Dict[str, Any]) -> List[str]:
+        groups = self._normalize_age_groups(profile.get("age_groups", []))
+        legacy_age = profile.get("age_group", "")
+        if legacy_age and legacy_age not in groups:
+            groups.append(str(legacy_age))
+        return groups
+
+    @staticmethod
+    def _mentions_negative(text: str, value: str) -> bool:
+        text_normalized = text.replace(" ", "")
+        if value not in text_normalized:
+            return False
+        return any(
+            f"{word}{value}" in text_normalized
+            or re.search(rf"{re.escape(word)}.{{0,2}}{re.escape(value)}", text_normalized)
+            for word in NEGATION_WORDS
+        )
+
+    def _detect_positive_option(self, text: str, options: List[str]) -> str:
+        text_normalized = text.strip()
+        for option in options:
+            if option in text_normalized and not self._mentions_negative(text_normalized, option):
+                return option
+        return ""
+
+    @staticmethod
+    def _query_title(age_group: Any = "", target: str = "", topic: str = "") -> str:
+        filters = []
+        age_groups = WhatsAppHandler._normalize_age_groups(age_group)
+        for age in age_groups:
+            label = AGE_GROUP_LABELS.get(age, age)
+            filters.append(f"{label}（{age}）")
         if target:
             filters.append(target)
         if topic:
@@ -251,16 +329,18 @@ class WhatsAppHandler:
     def _filter_courses(
         self,
         courses: List[Any],
-        age_group: str = "",
+        age_group: Any = "",
         target: str = "",
         topic: str = "",
     ) -> List[Any]:
-        if age_group:
+        age_groups = self._normalize_age_groups(age_group)
+        if age_groups:
             courses = [
                 c for c in courses
-                if (
-                    self._course_value(c, "age_group") == age_group
-                    or age_group in self._course_values(c, "age_groups")
+                if any(
+                    self._course_value(c, "age_group") == age
+                    or age in self._course_values(c, "age_groups")
+                    for age in age_groups
                 )
             ]
         if target:
@@ -296,15 +376,19 @@ class WhatsAppHandler:
             unique.append(course)
         return unique
 
-    def _fetch_courses(self, course_source: Any, age_group: str = "") -> List[Any]:
+    def _fetch_courses(self, course_source: Any, age_group: Any = "") -> List[Any]:
+        age_groups = self._normalize_age_groups(age_group)
         if hasattr(course_source, "fetch_courses"):
-            if age_group:
-                return course_source.fetch_courses(
-                    age_group=age_group,
-                    status="",
-                    max_retries=2,
-                    delay=1.0,
-                )
+            if age_groups:
+                courses = []
+                for age in age_groups:
+                    courses.extend(course_source.fetch_courses(
+                        age_group=age,
+                        status="",
+                        max_retries=2,
+                        delay=1.0,
+                    ))
+                return self._dedupe_courses(courses)
 
             courses = []
             for age in AGE_GROUP_LABELS:
@@ -322,42 +406,59 @@ class WhatsAppHandler:
 
         return course_source.fetch_all_open_courses(max_retries=2, delay=1.0)
 
-    def _update_profile_from_text(self, from_number: str, text: str) -> Dict[str, str]:
-        profile = dict(self._profiles.get(from_number, {}))
-        age_group = detect_age_group(text) or detect_child_age_group(text)
-        target = detect_target(text)
-        topic = detect_topic(text)
-        if age_group:
-            previous_age = profile.get("age_group", "")
-            profile["age_group"] = age_group
-            if previous_age and previous_age != age_group and not target and not topic:
+    def _load_profile(self, from_number: str) -> Dict[str, Any]:
+        if from_number not in self._profiles:
+            self._profiles[from_number] = self._memory.get_profile(from_number)
+        return dict(self._profiles.get(from_number, {}))
+
+    def _save_profile(self, from_number: str, profile: Dict[str, Any]) -> None:
+        self._profiles[from_number] = dict(profile)
+        self._memory.save_profile(from_number, profile)
+
+    def _update_profile_from_text(self, from_number: str, text: str) -> Dict[str, Any]:
+        profile = self._load_profile(from_number)
+        age_groups = detect_age_groups(text)
+        target = self._detect_positive_option(text, TARGETS)
+        topic = self._detect_positive_option(text, TOPICS)
+        negative_targets = [t for t in TARGETS if self._mentions_negative(text, t)]
+        negative_topics = [t for t in TOPICS if self._mentions_negative(text, t)]
+
+        if age_groups:
+            previous_groups = self._profile_age_groups(profile)
+            profile["age_groups"] = age_groups
+            profile["age_group"] = age_groups[0]
+            if previous_groups and previous_groups != age_groups and not target and not topic:
                 profile.pop("target", None)
                 profile.pop("topic", None)
         if target:
             profile["target"] = target
+        elif profile.get("target") in negative_targets:
+            profile.pop("target", None)
         if topic:
             profile["topic"] = topic
+        elif profile.get("topic") in negative_topics:
+            profile.pop("topic", None)
         self._profiles[from_number] = profile
+        self._memory.save_profile(from_number, profile)
         return profile
 
     @staticmethod
-    def _profile_has_signal(profile: Dict[str, str]) -> bool:
-        return any(profile.get(k) for k in ["age_group", "target", "topic"])
+    def _profile_has_signal(profile: Dict[str, Any]) -> bool:
+        return any(profile.get(k) for k in ["age_group", "age_groups", "target", "topic"])
 
-    def _profile_text(self, profile: Dict[str, str]) -> str:
+    def _profile_text(self, profile: Dict[str, Any]) -> str:
         if not self._profile_has_signal(profile):
             return "我暫時未知道孩子年齡或你想找哪類課程。"
         parts = []
-        age_group = profile.get("age_group", "")
-        if age_group:
-            parts.append(AGE_GROUP_LABELS.get(age_group, age_group))
+        for age_group in self._profile_age_groups(profile):
+            parts.append(f"{AGE_GROUP_LABELS.get(age_group, age_group)}（{age_group}）")
         if profile.get("target"):
             parts.append(profile["target"])
         if profile.get("topic"):
             parts.append(profile["topic"])
         return "我會先按「" + " / ".join(parts) + "」幫你縮窄。"
 
-    def _onboarding_text(self, profile: Dict[str, str]) -> str:
+    def _onboarding_text(self, profile: Dict[str, Any]) -> str:
         if self._profile_has_signal(profile):
             return (
                 f"好，我先不把全部課程丟給你。\n{self._profile_text(profile)}\n\n"
@@ -376,7 +477,7 @@ class WhatsAppHandler:
     def _get_courses_text(
         self,
         from_number: str,
-        age_group: str = "",
+        age_group: Any = "",
         target: str = "",
         topic: str = "",
         page: int = 1,
@@ -409,6 +510,7 @@ class WhatsAppHandler:
                 "last_courses": page_courses,
                 "last_start": start,
             }
+            self._memory.save_last_query(from_number, self._last_queries[from_number])
 
             lines = [
                 f"{self._query_title(age_group, target, topic)}\n第 {page}/{total_pages} 頁",
@@ -448,10 +550,15 @@ class WhatsAppHandler:
                     lines.append(f"🔗 {link}")
                 if agentic:
                     reason_bits = []
-                    if age_group and (
-                        self._course_value(c, "age_group") == age_group
-                        or age_group in self._course_values(c, "age_groups")
-                    ):
+                    matched_age = False
+                    for age in self._normalize_age_groups(age_group):
+                        if (
+                            self._course_value(c, "age_group") == age
+                            or age in self._course_values(c, "age_groups")
+                        ):
+                            matched_age = True
+                            break
+                    if matched_age:
                         reason_bits.append("年齡吻合")
                     if target and self._course_value(c, "target") == target:
                         reason_bits.append(f"適合{target}")
@@ -500,23 +607,23 @@ class WhatsAppHandler:
             parts.append(f"未標明年齡{counts['未標明']}個")
         return "、".join(parts) if parts else "暫時沒有報名中課程"
 
-    def _no_match_text(self, profile: Dict[str, str], courses: List[Any]) -> str:
-        age_group = profile.get("age_group", "")
+    def _no_match_text(self, profile: Dict[str, Any], courses: List[Any]) -> str:
+        age_groups = self._profile_age_groups(profile)
         target = profile.get("target", "")
         topic = profile.get("topic", "")
         filters = []
-        if age_group:
+        for age_group in age_groups:
             filters.append(f"{AGE_GROUP_LABELS.get(age_group, age_group)}（{age_group}）")
         if target:
             filters.append(target)
         if topic:
             filters.append(topic)
 
-        if age_group:
-            age_courses = self._filter_courses(courses, age_group=age_group)
+        if age_groups:
+            age_courses = self._filter_courses(courses, age_group=age_groups)
             if not age_courses:
                 return (
-                    f"我查了目前報名中的課程，暫時沒有 *{AGE_GROUP_LABELS.get(age_group, age_group)}（{age_group}）* "
+                    f"我查了目前報名中的課程，暫時沒有 *{' / '.join(filters)}* "
                     "適用的課程。\n\n"
                     f"現在有的年齡層是：{self._available_age_summary(courses)}。\n"
                     "你可以回覆其他年齡層，例如 *0-2歲*、*3-6歲*，或回覆 *全部課程* 看現有列表。"
@@ -568,23 +675,23 @@ class WhatsAppHandler:
         self,
         from_number: str,
         user_text: str,
-        profile: Dict[str, str],
+        profile: Dict[str, Any],
     ) -> Optional[str]:
         course_source = self._get_course_source()
         if not course_source or not get_deepseek_api_key():
             return None
 
         try:
-            requested_age = profile.get("age_group", "")
-            courses = self._fetch_courses(course_source, age_group=requested_age)
+            requested_ages = self._profile_age_groups(profile)
+            courses = self._fetch_courses(course_source, age_group=requested_ages)
             filtered = self._filter_courses(
                 courses,
-                requested_age,
+                requested_ages,
                 profile.get("target", ""),
                 profile.get("topic", ""),
             )
             if not filtered:
-                age_group = requested_age
+                age_group = requested_ages
                 has_secondary_filter = bool(profile.get("target") or profile.get("topic"))
                 if age_group and has_secondary_filter:
                     filtered = self._filter_courses(courses, age_group=age_group)
@@ -593,13 +700,14 @@ class WhatsAppHandler:
 
             candidates = filtered[:8]
             self._last_queries[from_number] = {
-                "age_group": profile.get("age_group", ""),
+                "age_group": requested_ages,
                 "target": profile.get("target", ""),
                 "topic": profile.get("topic", ""),
                 "page": 1,
                 "last_courses": candidates,
                 "last_start": 0,
             }
+            self._memory.save_last_query(from_number, self._last_queries[from_number])
             candidate_payload = [
                 self._course_summary_for_llm(course, i)
                 for i, course in enumerate(candidates, 1)
@@ -639,7 +747,7 @@ class WhatsAppHandler:
     def _get_agentic_recommendation_text(
         self,
         from_number: str,
-        profile: Dict[str, str],
+        profile: Dict[str, Any],
         user_text: str = "",
     ) -> str:
         if not self._profile_has_signal(profile):
@@ -651,7 +759,7 @@ class WhatsAppHandler:
 
         return self._get_courses_text(
             from_number=from_number,
-            age_group=profile.get("age_group", ""),
+            age_group=self._profile_age_groups(profile),
             target=profile.get("target", ""),
             topic=profile.get("topic", ""),
             page=1,
@@ -695,24 +803,39 @@ class WhatsAppHandler:
         if normalized in RESET_KEYWORDS:
             self._profiles.pop(from_number, None)
             self._last_queries.pop(from_number, None)
+            self._memory.clear_user(from_number)
             self._send_text(from_number, "已重設。你可以回覆：*小朋友幾歲，想找哪類課程*。")
             return
 
+        if normalized in PROFILE_KEYWORDS:
+            profile = self._load_profile(from_number)
+            reply = (
+                "📌 *我目前記得的偏好*\n\n"
+                f"{self._profile_text(profile)}\n\n"
+                "你可以直接補充，例如：*不要親子，要家長課*、*只要青少年*、*想身心健康*。"
+            )
+            self._send_text(from_number, reply)
+            return
+
         profile = self._update_profile_from_text(from_number, text)
-        age_group = detect_age_group(text) or detect_child_age_group(text)
-        target = detect_target(text)
-        topic = detect_topic(text)
+        age_groups = detect_age_groups(text)
+        target = self._detect_positive_option(text, TARGETS)
+        topic = self._detect_positive_option(text, TOPICS)
         page_request = self._parse_page_request(text)
         detail_request = self._parse_detail_request(text)
         if detail_request is not None:
             reply = self._get_course_detail_text(from_number, detail_request)
-        elif age_group or target or topic:
+        elif age_groups or target or topic:
             reply = self._get_agentic_recommendation_text(from_number, profile, text)
         elif page_request is not None:
             if from_number not in self._last_queries:
-                reply = self._get_agentic_recommendation_text(from_number, profile, text)
-                self._send_text(from_number, reply)
-                return
+                persisted_query = self._memory.get_last_query(from_number)
+                if persisted_query:
+                    self._last_queries[from_number] = persisted_query
+                else:
+                    reply = self._get_agentic_recommendation_text(from_number, profile, text)
+                    self._send_text(from_number, reply)
+                    return
             query = self._last_queries[from_number]
             if page_request == -1:
                 query["page"] = int(query.get("page", 1)) + 1
@@ -720,7 +843,7 @@ class WhatsAppHandler:
                 query["page"] = page_request
             reply = self._get_courses_text(
                 from_number=from_number,
-                age_group=str(query.get("age_group", "")),
+                age_group=query.get("age_group", ""),
                 target=str(query.get("target", "")),
                 topic=str(query.get("topic", "")),
                 page=int(query.get("page", 1)),

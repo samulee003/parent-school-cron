@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import sys
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -100,6 +101,18 @@ class FakeAcademyCrawler:
 
 
 class WhatsAppHandlerTests(unittest.TestCase):
+    def setUp(self):
+        self._old_memory_db = os.environ.get("WHATSAPP_MEMORY_DB")
+        self._tmpdir = tempfile.TemporaryDirectory()
+        os.environ["WHATSAPP_MEMORY_DB"] = os.path.join(self._tmpdir.name, "memory.db")
+
+    def tearDown(self):
+        self._tmpdir.cleanup()
+        if self._old_memory_db is None:
+            os.environ.pop("WHATSAPP_MEMORY_DB", None)
+        else:
+            os.environ["WHATSAPP_MEMORY_DB"] = self._old_memory_db
+
     def make_handler(self):
         handler = WhatsAppHandler()
         handler._get_bot = lambda: FakeBot()
@@ -228,6 +241,124 @@ class WhatsAppHandlerTests(unittest.TestCase):
         self.assertIn("第 2/3 頁", sent[1][1])
         self.assertIn("課程4", sent[1][1])
         self.assertNotIn("課程1", sent[1][1])
+
+    def test_persisted_last_query_supports_more_after_restart(self):
+        courses = [
+            Course(
+                id=f"c{i}",
+                name=f"課程{i}",
+                date="2026/06/20 星期六 15:00-16:00",
+                date_parsed=None,
+                age_group="0-2歲",
+                topic="家庭關係",
+                target="親子",
+                status="報名中",
+                detail_url=f"https://example.test/course/c{i}",
+            )
+            for i in range(1, 8)
+        ]
+        sent = []
+        first = WhatsAppHandler()
+        first._get_bot = lambda: type("Bot", (), {"scraper": FakeCrawler(courses)})()
+        first._send_text = lambda to, text: sent.append((to, text)) or True
+        first._handle_text_message("85360000000", "全部課程")
+
+        second = WhatsAppHandler()
+        second._get_bot = lambda: type("Bot", (), {"scraper": FakeCrawler(courses)})()
+        second._send_text = lambda to, text: sent.append((to, text)) or True
+        second._handle_text_message("85360000000", "還有嗎？")
+
+        self.assertIn("第 2/3 頁", sent[1][1])
+        self.assertIn("課程4", sent[1][1])
+        self.assertNotIn("課程1", sent[1][1])
+
+    def test_profile_is_persisted_across_handler_restart(self):
+        sent = []
+        first = WhatsAppHandler()
+        first._get_bot = lambda: FakeBot()
+        first._send_text = lambda to, text: sent.append((to, text)) or True
+        first._handle_text_message("85360000000", "小朋友1歲，想親子活動")
+
+        second = WhatsAppHandler()
+        second._get_bot = lambda: FakeBot()
+        second._send_text = lambda to, text: sent.append((to, text)) or True
+        second._handle_text_message("85360000000", "幫我揀")
+
+        self.assertIn("嬰幼繪本氹氹轉", sent[1][1])
+        self.assertNotIn("青少年親子溝通工作坊", sent[1][1])
+
+    def test_negative_target_can_refine_existing_memory(self):
+        courses = [
+            Course(
+                id="c1",
+                name="嬰幼親子活動",
+                date="2026/06/20 星期六 15:00-16:00",
+                date_parsed=None,
+                age_group="0-2歲",
+                topic="家庭關係",
+                target="親子",
+                status="報名中",
+                detail_url="https://example.test/course/c1",
+            ),
+            Course(
+                id="c2",
+                name="嬰幼家長講座",
+                date="2026/06/21 星期日 10:00-11:00",
+                date_parsed=None,
+                age_group="0-2歲",
+                topic="家庭關係",
+                target="家長",
+                status="報名中",
+                detail_url="https://example.test/course/c2",
+            ),
+        ]
+        handler = WhatsAppHandler()
+        handler._get_bot = lambda: type("Bot", (), {"scraper": FakeCrawler(courses)})()
+        sent = []
+        handler._send_text = lambda to, text: sent.append((to, text)) or True
+
+        handler._handle_text_message("85360000000", "小朋友1歲，想親子活動")
+        handler._handle_text_message("85360000000", "不要親子，要家長課")
+
+        self.assertIn("嬰幼家長講座", sent[1][1])
+        self.assertNotIn("嬰幼親子活動", sent[1][1])
+
+    def test_multiple_child_ages_are_remembered_together(self):
+        courses = [
+            Course(
+                id="c1",
+                name="幼兒親子活動",
+                date="2026/06/20 星期六 15:00-16:00",
+                date_parsed=None,
+                age_group="3-6歲",
+                age_groups=["3-6歲"],
+                topic="家庭關係",
+                target="親子",
+                status="報名中",
+                detail_url="https://example.test/course/c1",
+            ),
+            Course(
+                id="c2",
+                name="青少年親子工作坊",
+                date="2026/06/21 星期日 10:00-11:00",
+                date_parsed=None,
+                age_group="13-18歲",
+                age_groups=["13-18歲"],
+                topic="家庭關係",
+                target="親子",
+                status="報名中",
+                detail_url="https://example.test/course/c2",
+            ),
+        ]
+        handler = WhatsAppHandler()
+        handler._get_bot = lambda: type("Bot", (), {"scraper": FakeCrawler(courses)})()
+        sent = []
+        handler._send_text = lambda to, text: sent.append((to, text)) or True
+
+        handler._handle_text_message("85360000000", "我有一個4歲一個13歲，想親子活動")
+
+        self.assertIn("幼兒親子活動", sent[0][1])
+        self.assertIn("青少年親子工作坊", sent[0][1])
 
     def test_detail_request_returns_link_for_visible_course(self):
         handler, sent = self.make_handler()
