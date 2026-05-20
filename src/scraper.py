@@ -141,6 +141,7 @@ class CourseScraper:
             "regstatus": status,
             "search_fixdata": "",
             "search_data": keyword,
+            "pageis": str(max(page - 1, 0)),
             "search_order": (
                 "CASE WHEN (CURRENT_DATE BETWEEN a.remark4 AND a.remark5) THEN 1 "
                 "WHEN (CURRENT_DATE < a.remark4) THEN 2 "

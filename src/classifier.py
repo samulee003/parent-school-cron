@@ -26,9 +26,16 @@ class CourseClassifier:
         result["未知"] = []
 
         for course in courses:
-            if course.age_group and course.age_group in result:
-                result[course.age_group].append(course)
-            else:
+            course_ages = list(getattr(course, "age_groups", []) or [])
+            if course.age_group and course.age_group not in course_ages:
+                course_ages.append(course.age_group)
+
+            matched = False
+            for age in course_ages:
+                if age in result and course not in result[age]:
+                    result[age].append(course)
+                    matched = True
+            if not matched:
                 result["未知"].append(course)
 
         # 過濾空分組
@@ -93,7 +100,10 @@ class CourseClassifier:
 
     def filter_by_age_group(self, courses: List[Course], age_group: str) -> List[Course]:
         """篩選指定年齡層的課程"""
-        return [c for c in courses if c.age_group == age_group]
+        return [
+            c for c in courses
+            if c.age_group == age_group or age_group in (getattr(c, "age_groups", []) or [])
+        ]
 
     def filter_by_status(self, courses: List[Course], status: str) -> List[Course]:
         """篩選指定狀態的課程"""

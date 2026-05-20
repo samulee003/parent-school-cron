@@ -252,13 +252,17 @@ class WhatsAppHandler:
 
     @staticmethod
     def _parse_page_request(text: str) -> Optional[int]:
-        normalized = re.sub(r"[\s\?？!！。,.、，；;:：]+", "", text.strip().lower())
+        normalized = WhatsAppHandler._normalize_command(text)
         if normalized in NEXT_PAGE_KEYWORDS:
             return -1
         match = re.search(r"(?:第)?(\d+)(?:頁|页|page)?", normalized)
         if match and ("頁" in normalized or "页" in normalized or "page" in normalized):
             return max(int(match.group(1)), 1)
         return None
+
+    @staticmethod
+    def _normalize_command(text: str) -> str:
+        return re.sub(r"[\s\?？!！。,.、，；;:：]+", "", text.strip().lower())
 
     @staticmethod
     def _parse_detail_request(text: str) -> Optional[int]:
@@ -424,12 +428,8 @@ class WhatsAppHandler:
         negative_topics = [t for t in TOPICS if self._mentions_negative(text, t)]
 
         if age_groups:
-            previous_groups = self._profile_age_groups(profile)
             profile["age_groups"] = age_groups
             profile["age_group"] = age_groups[0]
-            if previous_groups and previous_groups != age_groups and not target and not topic:
-                profile.pop("target", None)
-                profile.pop("topic", None)
         if target:
             profile["target"] = target
         elif profile.get("target") in negative_targets:
@@ -796,7 +796,7 @@ class WhatsAppHandler:
     def _handle_text_message(self, from_number: str, text: str) -> None:
         """處理家長發送的文字消息"""
         text_lower = text.strip().lower()
-        normalized = text.strip().lower().replace(" ", "")
+        normalized = self._normalize_command(text)
         logger.info(f"收到消息 from={from_number}: {text}")
 
         # 關鍵詞匹配

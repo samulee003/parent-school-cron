@@ -360,6 +360,76 @@ class WhatsAppHandlerTests(unittest.TestCase):
         self.assertIn("幼兒親子活動", sent[0][1])
         self.assertIn("青少年親子工作坊", sent[0][1])
 
+    def test_profile_command_accepts_question_mark(self):
+        handler, sent = self.make_handler()
+
+        handler._handle_text_message("85360000000", "小朋友1歲，想親子活動")
+        handler._handle_text_message("85360000000", "我的偏好？")
+
+        self.assertIn("我目前記得的偏好", sent[1][1])
+        self.assertIn("嬰幼兒期", sent[1][1])
+
+    def test_age_only_refinement_preserves_existing_target(self):
+        courses = [
+            Course(
+                id="c1",
+                name="青少年親子工作坊",
+                date="2026/06/21 星期日 10:00-11:00",
+                date_parsed=None,
+                age_group="13-18歲",
+                age_groups=["13-18歲"],
+                topic="家庭關係",
+                target="親子",
+                status="報名中",
+                detail_url="https://example.test/course/c1",
+            ),
+            Course(
+                id="c2",
+                name="青少年家長講座",
+                date="2026/06/22 星期一 19:00-20:30",
+                date_parsed=None,
+                age_group="13-18歲",
+                age_groups=["13-18歲"],
+                topic="身心健康",
+                target="家長",
+                status="報名中",
+                detail_url="https://example.test/course/c2",
+            ),
+        ]
+        handler = WhatsAppHandler()
+        handler._get_bot = lambda: type("Bot", (), {"scraper": FakeCrawler(courses)})()
+        sent = []
+        handler._send_text = lambda to, text: sent.append((to, text)) or True
+
+        handler._handle_text_message("85360000000", "不要親子，要家長課")
+        handler._handle_text_message("85360000000", "只要青少年")
+
+        self.assertIn("青少年家長講座", sent[1][1])
+        self.assertNotIn("青少年親子工作坊", sent[1][1])
+
+    def test_deepseek_500_falls_back_to_rule_based_recommendation(self):
+        handler, sent = self.make_handler()
+
+        with patch.dict(os.environ, {"DEEPSEEK_API_KEY": "test-key"}, clear=False):
+            with patch("whatsapp_handler.requests.post") as post:
+                post.return_value.status_code = 500
+                post.return_value.text = "server error"
+
+                handler._handle_text_message("85360000000", "小朋友1歲，想親子活動")
+
+        self.assertIn("嬰幼繪本氹氹轉", sent[0][1])
+        self.assertIn("為什麼推薦", sent[0][1])
+
+    def test_deepseek_exception_falls_back_to_rule_based_recommendation(self):
+        handler, sent = self.make_handler()
+
+        with patch.dict(os.environ, {"DEEPSEEK_API_KEY": "test-key"}, clear=False):
+            with patch("whatsapp_handler.requests.post", side_effect=RuntimeError("boom")):
+                handler._handle_text_message("85360000000", "小朋友1歲，想親子活動")
+
+        self.assertIn("嬰幼繪本氹氹轉", sent[0][1])
+        self.assertIn("為什麼推薦", sent[0][1])
+
     def test_detail_request_returns_link_for_visible_course(self):
         handler, sent = self.make_handler()
 
