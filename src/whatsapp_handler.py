@@ -185,6 +185,13 @@ class WhatsAppHandler:
             start = (page - 1) * PAGE_SIZE
             page_courses = courses[start:start + PAGE_SIZE]
             lines = [f"{title}\n第 {page}/{total_pages} 頁"]
+            if page < total_pages:
+                lines.append(
+                    "下一頁請在下方輸入框傳送：*更多* 或 *下一頁*。"
+                    "如果 WhatsApp 顯示「閱讀更多」，那只是展開本訊息。"
+                )
+            elif total_pages > 1:
+                lines.append("已經是最後一頁。輸入 *課程* 可重新從第一頁開始。")
 
             for i, c in enumerate(page_courses, start + 1):
                 title = self._course_value(c, "name", "未命名課程")
@@ -205,8 +212,6 @@ class WhatsAppHandler:
             if remaining > 0:
                 lines.append(f"\n...還有 {remaining} 個課程")
                 lines.append("輸入 *更多* 或 *下一頁* 查看下一批。")
-            elif total_pages > 1:
-                lines.append("\n已經是最後一頁。輸入 *課程* 可重新從第一頁開始。")
 
             return "\n".join(lines)
         except Exception as e:
