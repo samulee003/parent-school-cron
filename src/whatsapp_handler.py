@@ -8,6 +8,7 @@ import logging
 import os
 import hashlib
 import hmac
+import re
 from typing import Optional, List, Dict, Any
 import requests
 
@@ -30,6 +31,9 @@ AGE_KEYWORDS = {
     "7-12歲": ("7-12", "7至12", "7到12", "小學", "小學生", "兒童"),
     "13-18歲": ("13-18", "13至18", "13到18", "中學", "中學生", "青少年"),
 }
+
+PAGE_SIZE = 5
+NEXT_PAGE_KEYWORDS = {"更多", "下一頁", "下頁", "more", "next"}
 
 
 def get_phone_number_id() -> str:
@@ -85,6 +89,7 @@ class WhatsAppHandler:
         self.access_token = get_access_token()
         self.api_url = f"{get_graph_api_base()}/{self.phone_number_id}/messages"
         self._bot: Optional[ZeaburBot] = None
+        self._last_queries: Dict[str, Dict[str, Any]] = {}
 
     def _get_bot(self) -> Optional[ZeaburBot]:
         """惰性初始化課程查詢 bot"""
@@ -139,7 +144,17 @@ class WhatsAppHandler:
             return str(course.get(attr, fallback) or fallback)
         return str(getattr(course, attr, fallback) or fallback)
 
-    def _get_courses_text(self, age_group: str = "") -> str:
+    @staticmethod
+    def _parse_page_request(text: str) -> Optional[int]:
+        normalized = text.strip().lower().replace(" ", "")
+        if normalized in NEXT_PAGE_KEYWORDS:
+            return -1
+        match = re.search(r"(?:第)?(\d+)(?:頁|页|page)?", normalized)
+        if match and ("頁" in normalized or "页" in normalized or "page" in normalized):
+            return max(int(match.group(1)), 1)
+        return None
+
+    def _get_courses_text(self, age_group: str = "", page: int = 1) -> str:
         """獲取課程列表文字"""
         course_source = self._get_course_source()
         if not course_source:
@@ -161,10 +176,17 @@ class WhatsAppHandler:
 
             if age_group:
                 label = AGE_GROUP_LABELS.get(age_group, age_group)
-                lines = [f"📚 *澳門家長學堂 {label}（{age_group}）課程*"]
+                title = f"📚 *澳門家長學堂 {label}（{age_group}）課程*"
             else:
-                lines = ["📚 *澳門家長學堂最新課程*"]
-            for i, c in enumerate(courses[:5], 1):
+                title = "📚 *澳門家長學堂最新課程*"
+
+            total_pages = max((len(courses) + PAGE_SIZE - 1) // PAGE_SIZE, 1)
+            page = min(max(page, 1), total_pages)
+            start = (page - 1) * PAGE_SIZE
+            page_courses = courses[start:start + PAGE_SIZE]
+            lines = [f"{title}\n第 {page}/{total_pages} 頁"]
+
+            for i, c in enumerate(page_courses, start + 1):
                 title = self._course_value(c, "name", "未命名課程")
                 date_str = self._course_value(c, "date")
                 topic = self._course_value(c, "topic")
@@ -179,8 +201,12 @@ class WhatsAppHandler:
                 if link:
                     lines.append(f"🔗 {link}")
 
-            if len(courses) > 5:
-                lines.append(f"\n...還有 {len(courses) - 5} 個課程")
+            remaining = len(courses) - (start + len(page_courses))
+            if remaining > 0:
+                lines.append(f"\n...還有 {remaining} 個課程")
+                lines.append("輸入 *更多* 或 *下一頁* 查看下一批。")
+            elif total_pages > 1:
+                lines.append("\n已經是最後一頁。輸入 *課程* 可重新從第一頁開始。")
 
             return "\n".join(lines)
         except Exception as e:
@@ -194,10 +220,24 @@ class WhatsAppHandler:
 
         # 關鍵詞匹配
         age_group = detect_age_group(text)
+        page_request = self._parse_page_request(text)
         if age_group:
-            reply = self._get_courses_text(age_group=age_group)
+            self._last_queries[from_number] = {"age_group": age_group, "page": 1}
+            reply = self._get_courses_text(age_group=age_group, page=1)
+        elif page_request is not None:
+            query = self._last_queries.get(from_number, {"age_group": "", "page": 1})
+            if page_request == -1:
+                query["page"] = int(query.get("page", 1)) + 1
+            else:
+                query["page"] = page_request
+            self._last_queries[from_number] = query
+            reply = self._get_courses_text(
+                age_group=str(query.get("age_group", "")),
+                page=int(query.get("page", 1)),
+            )
         elif any(k in text_lower for k in ["課程", "course", "最新"]):
-            reply = self._get_courses_text()
+            self._last_queries[from_number] = {"age_group": "", "page": 1}
+            reply = self._get_courses_text(page=1)
         elif any(k in text_lower for k in ["報名", "報名表", "報名連結"]):
             reply = (
                 "📝 *報名方式*\n\n"
@@ -210,6 +250,7 @@ class WhatsAppHandler:
                 "👋 你好！我是澳門家長學堂課程助手。\n\n"
                 "你可以發送以下關鍵詞：\n"
                 "• *課程* / *最新* — 查看最新課程列表\n"
+                "• *更多* / *下一頁* — 查看下一批課程\n"
                 "• *報名* — 獲取報名資訊\n\n"
                 "有什麼可以幫你的嗎？"
             )
@@ -218,6 +259,7 @@ class WhatsAppHandler:
                 "🤔 我不太明白你的意思。\n\n"
                 "試試發送：\n"
                 "• *課程* — 查看最新課程\n"
+                "• *更多* — 查看下一批課程\n"
                 "• *報名* — 報名資訊\n"
                 "• *你好* — 查看幫助"
             )

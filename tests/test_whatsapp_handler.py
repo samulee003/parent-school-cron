@@ -19,8 +19,8 @@ from whatsapp_handler import WhatsAppHandler, is_valid_meta_signature
 
 
 class FakeCrawler:
-    def __init__(self):
-        self.courses = [
+    def __init__(self, courses=None):
+        self.courses = courses or [
             Course(
                 id="c1",
                 name="嬰幼繪本氹氹轉",
@@ -95,6 +95,62 @@ class WhatsAppHandlerTests(unittest.TestCase):
 
         self.assertIn("嬰幼繪本氹氹轉", sent[0][1])
         self.assertNotIn("青少年親子溝通工作坊", sent[0][1])
+
+    def test_courses_keyword_prompts_next_page_when_more_courses_exist(self):
+        courses = [
+            Course(
+                id=f"c{i}",
+                name=f"課程{i}",
+                date="2026/06/20 星期六 15:00-16:00",
+                date_parsed=None,
+                age_group="0-2歲",
+                topic="家庭關係",
+                target="親子",
+                status="報名中",
+                detail_url=f"https://example.test/course/c{i}",
+            )
+            for i in range(1, 8)
+        ]
+        handler = WhatsAppHandler()
+        handler._get_bot = lambda: type("Bot", (), {"scraper": FakeCrawler(courses)})()
+        sent = []
+        handler._send_text = lambda to, text: sent.append((to, text)) or True
+
+        handler._handle_text_message("85360000000", "課程")
+
+        self.assertIn("第 1/2 頁", sent[0][1])
+        self.assertIn("課程1", sent[0][1])
+        self.assertIn("課程5", sent[0][1])
+        self.assertNotIn("課程6", sent[0][1])
+        self.assertIn("輸入 *更多* 或 *下一頁*", sent[0][1])
+
+    def test_next_page_returns_remaining_courses_for_last_query(self):
+        courses = [
+            Course(
+                id=f"c{i}",
+                name=f"課程{i}",
+                date="2026/06/20 星期六 15:00-16:00",
+                date_parsed=None,
+                age_group="0-2歲",
+                topic="家庭關係",
+                target="親子",
+                status="報名中",
+                detail_url=f"https://example.test/course/c{i}",
+            )
+            for i in range(1, 8)
+        ]
+        handler = WhatsAppHandler()
+        handler._get_bot = lambda: type("Bot", (), {"scraper": FakeCrawler(courses)})()
+        sent = []
+        handler._send_text = lambda to, text: sent.append((to, text)) or True
+
+        handler._handle_text_message("85360000000", "課程")
+        handler._handle_text_message("85360000000", "更多")
+
+        self.assertIn("第 2/2 頁", sent[1][1])
+        self.assertIn("課程6", sent[1][1])
+        self.assertIn("課程7", sent[1][1])
+        self.assertIn("已經是最後一頁", sent[1][1])
 
     def test_meta_signature_verification(self):
         body = b'{"object":"whatsapp_business_account"}'
