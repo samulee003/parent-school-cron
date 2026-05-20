@@ -99,6 +99,15 @@ def get_deepseek_daily_limit_per_user() -> int:
         return 12
 
 
+def get_deepseek_daily_limit_global() -> int:
+    raw_limit = os.environ.get("DEEPSEEK_DAILY_LIMIT_GLOBAL", "200")
+    try:
+        return max(int(raw_limit), 0)
+    except ValueError:
+        logger.warning("DEEPSEEK_DAILY_LIMIT_GLOBAL 無效，使用預設值 200")
+        return 200
+
+
 def is_valid_meta_signature(payload: bytes, signature_header: str, app_secret: str) -> bool:
     """驗證 Meta Webhook 的 X-Hub-Signature-256。"""
     if not payload or not signature_header or not app_secret:
@@ -788,12 +797,19 @@ class WhatsAppHandler:
                 return cached_reply
 
             daily_limit = get_deepseek_daily_limit_per_user()
-            if not self._memory.try_consume_llm_quota(from_number, daily_limit):
+            global_limit = get_deepseek_daily_limit_global()
+            if not self._memory.try_consume_llm_quotas(
+                from_number,
+                per_user_daily_limit=daily_limit,
+                global_daily_limit=global_limit,
+            ):
                 logger.info(
-                    "DeepSeek 每日限額已達 from=%s usage=%s limit=%s",
+                    "DeepSeek 每日限額已達 from=%s usage=%s limit=%s global_usage=%s global_limit=%s",
                     from_number,
                     self._memory.get_llm_usage_count(from_number),
                     daily_limit,
+                    self._memory.get_llm_usage_count("__global__"),
+                    global_limit,
                 )
                 return None
 

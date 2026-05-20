@@ -487,6 +487,33 @@ class WhatsAppHandlerTests(unittest.TestCase):
         self.assertIn("為什麼推薦", sent[0][1])
         self.assertEqual(handler._memory.get_llm_usage_count("85360000000"), 0)
 
+    def test_deepseek_global_daily_limit_falls_back_for_other_users(self):
+        handler, sent = self.make_handler()
+
+        with patch.dict(
+            os.environ,
+            {
+                "DEEPSEEK_API_KEY": "test-key",
+                "DEEPSEEK_DAILY_LIMIT_PER_USER": "12",
+                "DEEPSEEK_DAILY_LIMIT_GLOBAL": "1",
+            },
+            clear=False,
+        ):
+            with patch("whatsapp_handler.requests.post") as post:
+                post.return_value.status_code = 200
+                post.return_value.json.return_value = {
+                    "choices": [{"message": {"content": "LLM 全域第一次回覆"}}]
+                }
+
+                handler._handle_text_message("85360000000", "小朋友1歲，想親子活動")
+                handler._handle_text_message("85360000001", "小朋友1歲，想家庭關係課程")
+
+        self.assertEqual(post.call_count, 1)
+        self.assertEqual(sent[0][1], "LLM 全域第一次回覆")
+        self.assertIn("嬰幼繪本氹氹轉", sent[1][1])
+        self.assertIn("為什麼推薦", sent[1][1])
+        self.assertEqual(handler._memory.get_llm_usage_count("__global__"), 1)
+
     def test_off_topic_recommendation_does_not_call_deepseek_after_profile_exists(self):
         handler, sent = self.make_handler()
 

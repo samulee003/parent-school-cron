@@ -188,6 +188,22 @@ class WhatsAppMemoryStore:
 
     def try_consume_llm_quota(self, phone: str, daily_limit: int, usage_date: str = "") -> bool:
         """Increment and return True when the user still has daily LLM quota."""
+        return self.try_consume_llm_quotas(
+            phone=phone,
+            per_user_daily_limit=daily_limit,
+            global_daily_limit=0,
+            usage_date=usage_date,
+        )
+
+    def try_consume_llm_quotas(
+        self,
+        phone: str,
+        per_user_daily_limit: int,
+        global_daily_limit: int = 0,
+        usage_date: str = "",
+    ) -> bool:
+        """Increment user/global usage when both quotas still allow a call."""
+        daily_limit = per_user_daily_limit
         if daily_limit <= 0:
             return False
 
@@ -206,6 +222,19 @@ class WhatsAppMemoryStore:
                 if current_count >= daily_limit:
                     return False
 
+                global_phone = "__global__"
+                if global_daily_limit > 0:
+                    global_row = conn.execute(
+                        """
+                        SELECT count FROM llm_daily_usage
+                        WHERE phone = ? AND usage_date = ?
+                        """,
+                        (global_phone, usage_date),
+                    ).fetchone()
+                    global_count = int(global_row[0]) if global_row else 0
+                    if global_count >= global_daily_limit:
+                        return False
+
                 conn.execute(
                     """
                     INSERT INTO llm_daily_usage (phone, usage_date, count, updated_at)
@@ -216,6 +245,17 @@ class WhatsAppMemoryStore:
                     """,
                     (phone, usage_date, now),
                 )
+                if global_daily_limit > 0:
+                    conn.execute(
+                        """
+                        INSERT INTO llm_daily_usage (phone, usage_date, count, updated_at)
+                        VALUES (?, ?, 1, ?)
+                        ON CONFLICT(phone, usage_date) DO UPDATE SET
+                            count=count + 1,
+                            updated_at=excluded.updated_at
+                        """,
+                        (global_phone, usage_date, now),
+                    )
                 conn.commit()
                 return True
 
