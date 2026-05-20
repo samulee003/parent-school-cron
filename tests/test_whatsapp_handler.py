@@ -6,6 +6,7 @@ import logging
 import os
 import sys
 import unittest
+from unittest.mock import patch
 
 ROOT = os.path.dirname(os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(ROOT, "src"))
@@ -67,15 +68,25 @@ class WhatsAppHandlerTests(unittest.TestCase):
         handler._send_text = lambda to, text: sent.append((to, text)) or True
         return handler, sent
 
-    def test_courses_keyword_returns_latest_course_objects(self):
+    def test_courses_keyword_without_profile_asks_for_context(self):
         handler, sent = self.make_handler()
 
         handler._handle_text_message("85360000000", "課程")
 
         self.assertEqual(sent[0][0], "85360000000")
+        self.assertIn("我先幫你縮窄", sent[0][1])
+        self.assertIn("小朋友1歲", sent[0][1])
+        self.assertNotIn("嬰幼繪本氹氹轉", sent[0][1])
+
+    def test_all_courses_returns_compact_course_objects_without_links(self):
+        handler, sent = self.make_handler()
+
+        handler._handle_text_message("85360000000", "全部課程")
+
         self.assertIn("嬰幼繪本氹氹轉", sent[0][1])
         self.assertIn("青少年親子溝通工作坊", sent[0][1])
-        self.assertIn("https://example.test/course/c1", sent[0][1])
+        self.assertNotIn("https://example.test/course/c1", sent[0][1])
+        self.assertIn("回覆 *詳情1* 看報名連結", sent[0][1])
 
     def test_courses_keyword_supports_zeabur_bot_scraper_shape(self):
         handler = WhatsAppHandler()
@@ -83,7 +94,7 @@ class WhatsAppHandlerTests(unittest.TestCase):
         sent = []
         handler._send_text = lambda to, text: sent.append((to, text)) or True
 
-        handler._handle_text_message("85360000000", "課程")
+        handler._handle_text_message("85360000000", "全部課程")
 
         self.assertEqual(sent[0][0], "85360000000")
         self.assertIn("嬰幼繪本氹氹轉", sent[0][1])
@@ -116,12 +127,12 @@ class WhatsAppHandlerTests(unittest.TestCase):
         sent = []
         handler._send_text = lambda to, text: sent.append((to, text)) or True
 
-        handler._handle_text_message("85360000000", "課程")
+        handler._handle_text_message("85360000000", "全部課程")
 
-        self.assertIn("第 1/2 頁", sent[0][1])
+        self.assertIn("第 1/3 頁", sent[0][1])
         self.assertIn("課程1", sent[0][1])
-        self.assertIn("課程5", sent[0][1])
-        self.assertNotIn("課程6", sent[0][1])
+        self.assertIn("課程3", sent[0][1])
+        self.assertNotIn("課程4", sent[0][1])
         self.assertIn("輸入 *更多* 或 *下一頁*", sent[0][1])
 
     def test_next_page_returns_remaining_courses_for_last_query(self):
@@ -144,13 +155,64 @@ class WhatsAppHandlerTests(unittest.TestCase):
         sent = []
         handler._send_text = lambda to, text: sent.append((to, text)) or True
 
-        handler._handle_text_message("85360000000", "課程")
+        handler._handle_text_message("85360000000", "全部課程")
         handler._handle_text_message("85360000000", "更多")
 
-        self.assertIn("第 2/2 頁", sent[1][1])
+        self.assertIn("第 2/3 頁", sent[1][1])
+        self.assertIn("課程4", sent[1][1])
         self.assertIn("課程6", sent[1][1])
-        self.assertIn("課程7", sent[1][1])
-        self.assertIn("已經是最後一頁", sent[1][1])
+        self.assertNotIn("課程7", sent[1][1])
+
+    def test_detail_request_returns_link_for_visible_course(self):
+        handler, sent = self.make_handler()
+
+        handler._handle_text_message("85360000000", "全部課程")
+        handler._handle_text_message("85360000000", "詳情1")
+
+        self.assertIn("嬰幼繪本氹氹轉", sent[1][1])
+        self.assertIn("https://example.test/course/c1", sent[1][1])
+
+    def test_filter_by_target_keeps_list_focused(self):
+        handler, sent = self.make_handler()
+
+        handler._handle_text_message("85360000000", "家長")
+
+        self.assertIn("青少年親子溝通工作坊", sent[0][1])
+        self.assertNotIn("嬰幼繪本氹氹轉", sent[0][1])
+
+    def test_agentic_recommendation_infers_child_age_from_sentence(self):
+        handler, sent = self.make_handler()
+
+        handler._handle_text_message("85360000000", "小朋友1歲，想親子活動")
+
+        self.assertIn("嬰幼繪本氹氹轉", sent[0][1])
+        self.assertIn("為什麼推薦", sent[0][1])
+        self.assertNotIn("青少年親子溝通工作坊", sent[0][1])
+
+    def test_deepseek_is_used_for_agentic_recommendation_when_configured(self):
+        handler, sent = self.make_handler()
+
+        with patch.dict(os.environ, {"DEEPSEEK_API_KEY": "test-key"}, clear=False):
+            with patch("whatsapp_handler.requests.post") as post:
+                post.return_value.status_code = 200
+                post.return_value.json.return_value = {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": "我會先推介 1. 嬰幼繪本氹氹轉。回覆 詳情1 看連結。"
+                            }
+                        }
+                    ]
+                }
+
+                handler._handle_text_message("85360000000", "小朋友1歲，想親子活動")
+
+        self.assertIn("我會先推介", sent[0][1])
+        self.assertIn("詳情1", sent[0][1])
+        self.assertTrue(post.called)
+        payload = post.call_args.kwargs["json"]
+        self.assertEqual(payload["model"], "deepseek-v4-flash")
+        self.assertEqual(payload["thinking"], {"type": "disabled"})
 
     def test_meta_signature_verification(self):
         body = b'{"object":"whatsapp_business_account"}'

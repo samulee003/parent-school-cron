@@ -8,12 +8,13 @@ import logging
 import os
 import hashlib
 import hmac
+import json
 import re
 from typing import Optional, List, Dict, Any
 import requests
 
 from bot_webhook import ZeaburBot
-from scraper import AGE_GROUP_LABELS
+from scraper import AGE_GROUP_LABELS, TOPICS, TARGETS
 
 logger = logging.getLogger("whatsapp_handler")
 
@@ -32,8 +33,10 @@ AGE_KEYWORDS = {
     "13-18歲": ("13-18", "13至18", "13到18", "中學", "中學生", "青少年"),
 }
 
-PAGE_SIZE = 5
+PAGE_SIZE = 3
 NEXT_PAGE_KEYWORDS = {"更多", "下一頁", "下頁", "more", "next"}
+ALL_COURSE_KEYWORDS = {"全部課程", "全部", "all"}
+RESET_KEYWORDS = {"重設", "重新設定", "reset"}
 
 
 def get_phone_number_id() -> str:
@@ -49,6 +52,18 @@ def get_access_token() -> str:
 def get_verify_token() -> str:
     """從環境變量獲取 Webhook Verify Token"""
     return os.environ.get("WHATSAPP_VERIFY_TOKEN", "")
+
+
+def get_deepseek_api_key() -> str:
+    return os.environ.get("DEEPSEEK_API_KEY", "")
+
+
+def get_deepseek_base_url() -> str:
+    return os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com").rstrip("/")
+
+
+def get_deepseek_model() -> str:
+    return os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-flash")
 
 
 def is_valid_meta_signature(payload: bytes, signature_header: str, app_secret: str) -> bool:
@@ -81,6 +96,40 @@ def detect_age_group(text: str) -> Optional[str]:
     return None
 
 
+def detect_child_age_group(text: str) -> Optional[str]:
+    """從自然語句推測孩子年齡層，例如「小朋友1歲半」「孩子7歲」。"""
+    text_lower = text.strip().lower().replace("岁", "歲")
+    match = re.search(r"(\d+(?:\.\d+)?)\s*歲", text_lower)
+    if not match:
+        return None
+    age = float(match.group(1))
+    if 0 <= age < 3:
+        return "0-2歲"
+    if 3 <= age < 7:
+        return "3-6歲"
+    if 7 <= age < 13:
+        return "7-12歲"
+    if 13 <= age <= 18:
+        return "13-18歲"
+    return None
+
+
+def detect_target(text: str) -> str:
+    text_normalized = text.strip()
+    for target in TARGETS:
+        if target in text_normalized:
+            return target
+    return ""
+
+
+def detect_topic(text: str) -> str:
+    text_normalized = text.strip()
+    for topic in TOPICS:
+        if topic in text_normalized:
+            return topic
+    return ""
+
+
 class WhatsAppHandler:
     """WhatsApp Cloud API 消息處理器"""
 
@@ -90,6 +139,7 @@ class WhatsAppHandler:
         self.api_url = f"{get_graph_api_base()}/{self.phone_number_id}/messages"
         self._bot: Optional[ZeaburBot] = None
         self._last_queries: Dict[str, Dict[str, Any]] = {}
+        self._profiles: Dict[str, Dict[str, str]] = {}
 
     def _get_bot(self) -> Optional[ZeaburBot]:
         """惰性初始化課程查詢 bot"""
@@ -154,7 +204,118 @@ class WhatsAppHandler:
             return max(int(match.group(1)), 1)
         return None
 
-    def _get_courses_text(self, age_group: str = "", page: int = 1) -> str:
+    @staticmethod
+    def _parse_detail_request(text: str) -> Optional[int]:
+        normalized = text.strip().lower().replace(" ", "")
+        match = re.fullmatch(r"(?:詳情|詳細|detail|link|連結)(\d+)", normalized)
+        if match:
+            return int(match.group(1))
+        return None
+
+    @staticmethod
+    def _is_course_intent(text: str) -> bool:
+        text_lower = text.strip().lower()
+        return any(k in text_lower for k in ["課程", "course", "最新", "推薦", "幫我揀", "幫我選"])
+
+    @staticmethod
+    def _is_all_courses_request(text: str) -> bool:
+        normalized = text.strip().lower().replace(" ", "")
+        return normalized in ALL_COURSE_KEYWORDS
+
+    @staticmethod
+    def _query_title(age_group: str = "", target: str = "", topic: str = "") -> str:
+        filters = []
+        if age_group:
+            label = AGE_GROUP_LABELS.get(age_group, age_group)
+            filters.append(f"{label}（{age_group}）")
+        if target:
+            filters.append(target)
+        if topic:
+            filters.append(topic)
+        if filters:
+            return f"📚 *{' / '.join(filters)}課程*"
+        return "📚 *澳門家長學堂精選課程*"
+
+    def _filter_courses(
+        self,
+        courses: List[Any],
+        age_group: str = "",
+        target: str = "",
+        topic: str = "",
+    ) -> List[Any]:
+        if age_group:
+            courses = [
+                c for c in courses
+                if self._course_value(c, "age_group") == age_group
+            ]
+        if target:
+            courses = [
+                c for c in courses
+                if self._course_value(c, "target") == target
+            ]
+        if topic:
+            courses = [
+                c for c in courses
+                if self._course_value(c, "topic") == topic
+            ]
+        return courses
+
+    def _update_profile_from_text(self, from_number: str, text: str) -> Dict[str, str]:
+        profile = dict(self._profiles.get(from_number, {}))
+        age_group = detect_age_group(text) or detect_child_age_group(text)
+        target = detect_target(text)
+        topic = detect_topic(text)
+        if age_group:
+            profile["age_group"] = age_group
+        if target:
+            profile["target"] = target
+        if topic:
+            profile["topic"] = topic
+        self._profiles[from_number] = profile
+        return profile
+
+    @staticmethod
+    def _profile_has_signal(profile: Dict[str, str]) -> bool:
+        return any(profile.get(k) for k in ["age_group", "target", "topic"])
+
+    def _profile_text(self, profile: Dict[str, str]) -> str:
+        if not self._profile_has_signal(profile):
+            return "我暫時未知道孩子年齡或你想找哪類課程。"
+        parts = []
+        age_group = profile.get("age_group", "")
+        if age_group:
+            parts.append(AGE_GROUP_LABELS.get(age_group, age_group))
+        if profile.get("target"):
+            parts.append(profile["target"])
+        if profile.get("topic"):
+            parts.append(profile["topic"])
+        return "我會先按「" + " / ".join(parts) + "」幫你縮窄。"
+
+    def _onboarding_text(self, profile: Dict[str, str]) -> str:
+        if self._profile_has_signal(profile):
+            return (
+                f"好，我先不把全部課程丟給你。\n{self._profile_text(profile)}\n\n"
+                "你可以補一句，例如：*想親子*、*想家長課*、*重視身心健康*。\n"
+                "我會按你的條件推薦少量課程。"
+            )
+        return (
+            "我先幫你縮窄，不直接丟一堆課程。\n\n"
+            "請回覆一句就可以：\n"
+            "例：*小朋友1歲，想親子活動*\n"
+            "例：*孩子7歲，想環境適應*\n"
+            "例：*家長，想身心健康*\n\n"
+            "如果你真的要看全列表，回覆 *全部課程*。"
+        )
+
+    def _get_courses_text(
+        self,
+        from_number: str,
+        age_group: str = "",
+        target: str = "",
+        topic: str = "",
+        page: int = 1,
+        agentic: bool = False,
+    ) -> str:
         """獲取課程列表文字"""
         course_source = self._get_course_source()
         if not course_source:
@@ -162,29 +323,38 @@ class WhatsAppHandler:
 
         try:
             courses = course_source.fetch_all_open_courses(max_retries=2, delay=1.0)
-            if age_group:
-                courses = [
-                    c for c in courses
-                    if self._course_value(c, "age_group") == age_group
-                ]
+            courses = self._filter_courses(courses, age_group, target, topic)
 
             if not courses:
-                if age_group:
-                    label = AGE_GROUP_LABELS.get(age_group, age_group)
-                    return f"目前沒有找到 {label}（{age_group}）的報名中課程，請稍後再查詢。"
-                return "目前沒有找到報名中課程，請稍後再查詢。"
-
-            if age_group:
-                label = AGE_GROUP_LABELS.get(age_group, age_group)
-                title = f"📚 *澳門家長學堂 {label}（{age_group}）課程*"
-            else:
-                title = "📚 *澳門家長學堂最新課程*"
+                return (
+                    "目前沒有找到符合條件的報名中課程。\n\n"
+                    "可以試試：*課程*、*0-2歲*、*親子*、*家長*、*身心健康*。"
+                )
 
             total_pages = max((len(courses) + PAGE_SIZE - 1) // PAGE_SIZE, 1)
             page = min(max(page, 1), total_pages)
             start = (page - 1) * PAGE_SIZE
             page_courses = courses[start:start + PAGE_SIZE]
-            lines = [f"{title}\n第 {page}/{total_pages} 頁"]
+            self._last_queries[from_number] = {
+                "age_group": age_group,
+                "target": target,
+                "topic": topic,
+                "page": page,
+                "last_courses": page_courses,
+                "last_start": start,
+            }
+
+            lines = [
+                f"{self._query_title(age_group, target, topic)}\n第 {page}/{total_pages} 頁",
+            ]
+            if agentic:
+                lines.append(
+                    "我先挑最貼近你條件的少量選項；想看連結再回覆 *詳情編號*。"
+                )
+            if page == 1 and not any([age_group, target, topic]):
+                lines.append(
+                    "想少一點雜訊，可以直接回覆：*0-2歲*、*3-6歲*、*親子*、*家長*、*身心健康*。"
+                )
             if page < total_pages:
                 lines.append(
                     "下一頁請在下方輸入框傳送：*更多* 或 *下一頁*。"
@@ -198,15 +368,23 @@ class WhatsAppHandler:
                 date_str = self._course_value(c, "date")
                 topic = self._course_value(c, "topic")
                 target = self._course_value(c, "target")
-                link = self._course_value(c, "detail_url")
                 lines.append(f"\n*{i}. {title}*")
                 if date_str:
                     lines.append(f"📅 {date_str}")
                 tags = " | ".join([v for v in [topic, target] if v])
                 if tags:
                     lines.append(f"🏷️ {tags}")
-                if link:
-                    lines.append(f"🔗 {link}")
+                if agentic:
+                    reason_bits = []
+                    if age_group and self._course_value(c, "age_group") == age_group:
+                        reason_bits.append("年齡吻合")
+                    if target and self._course_value(c, "target") == target:
+                        reason_bits.append(f"適合{target}")
+                    if topic and self._course_value(c, "topic") == topic:
+                        reason_bits.append(f"主題是{topic}")
+                    if reason_bits:
+                        lines.append(f"為什麼推薦：{'、'.join(reason_bits)}")
+                lines.append(f"回覆 *詳情{i}* 看報名連結")
 
             remaining = len(courses) - (start + len(page_courses))
             if remaining > 0:
@@ -218,31 +396,207 @@ class WhatsAppHandler:
             logger.exception(f"獲取課程失敗: {e}")
             return "課程資料獲取失敗，請稍後再試。"
 
+    def _course_summary_for_llm(self, course: Any, number: int) -> Dict[str, str]:
+        return {
+            "number": str(number),
+            "name": self._course_value(course, "name"),
+            "date": self._course_value(course, "date"),
+            "age_group": self._course_value(course, "age_group"),
+            "topic": self._course_value(course, "topic"),
+            "target": self._course_value(course, "target"),
+        }
+
+    def _call_deepseek(self, messages: List[Dict[str, str]], max_tokens: int = 650) -> Optional[str]:
+        api_key = get_deepseek_api_key()
+        if not api_key:
+            return None
+
+        payload = {
+            "model": get_deepseek_model(),
+            "messages": messages,
+            "thinking": {"type": "disabled"},
+            "stream": False,
+            "temperature": 0.4,
+            "max_tokens": max_tokens,
+        }
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+
+        try:
+            resp = requests.post(
+                f"{get_deepseek_base_url()}/chat/completions",
+                headers=headers,
+                json=payload,
+                timeout=25,
+            )
+            if resp.status_code != 200:
+                logger.warning("DeepSeek API 失敗: %s %s", resp.status_code, resp.text[:500])
+                return None
+            data = resp.json()
+            content = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+            return content.strip() or None
+        except Exception as e:
+            logger.warning("DeepSeek API 異常: %s", e)
+            return None
+
+    def _get_llm_recommendation_text(
+        self,
+        from_number: str,
+        user_text: str,
+        profile: Dict[str, str],
+    ) -> Optional[str]:
+        course_source = self._get_course_source()
+        if not course_source or not get_deepseek_api_key():
+            return None
+
+        try:
+            courses = course_source.fetch_all_open_courses(max_retries=2, delay=1.0)
+            filtered = self._filter_courses(
+                courses,
+                profile.get("age_group", ""),
+                profile.get("target", ""),
+                profile.get("topic", ""),
+            )
+            if not filtered:
+                filtered = courses
+
+            candidates = filtered[:8]
+            self._last_queries[from_number] = {
+                "age_group": profile.get("age_group", ""),
+                "target": profile.get("target", ""),
+                "topic": profile.get("topic", ""),
+                "page": 1,
+                "last_courses": candidates,
+                "last_start": 0,
+            }
+            candidate_payload = [
+                self._course_summary_for_llm(course, i)
+                for i, course in enumerate(candidates, 1)
+            ]
+            messages = [
+                {
+                    "role": "system",
+                    "content": (
+                        "你是澳門家長學堂 WhatsApp agentic 課程助手。"
+                        "你要先理解家長情境，再從候選課程中挑少量選項。"
+                        "只能根據候選課程回答，不可創造課程、日期、名額或連結。"
+                        "最多推薦 3 個課程。每個推薦要有一句人話理由。"
+                        "不要貼 URL；請叫用戶回覆「詳情1」這類編號看報名連結。"
+                        "如果資料不足，只問 1 個最關鍵問題。"
+                        "用繁體中文，口吻自然、簡短、像真人助手，不要像公告。"
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": json.dumps(
+                        {
+                            "家長訊息": user_text,
+                            "已知偏好": profile,
+                            "候選課程": candidate_payload,
+                            "輸出限制": "WhatsApp 短訊格式，最多 900 字。",
+                        },
+                        ensure_ascii=False,
+                    ),
+                },
+            ]
+            return self._call_deepseek(messages)
+        except Exception as e:
+            logger.warning("LLM 推薦建立失敗: %s", e)
+            return None
+
+    def _get_agentic_recommendation_text(
+        self,
+        from_number: str,
+        profile: Dict[str, str],
+        user_text: str = "",
+    ) -> str:
+        if not self._profile_has_signal(profile):
+            return self._onboarding_text(profile)
+
+        llm_reply = self._get_llm_recommendation_text(from_number, user_text, profile)
+        if llm_reply:
+            return llm_reply
+
+        return self._get_courses_text(
+            from_number=from_number,
+            age_group=profile.get("age_group", ""),
+            target=profile.get("target", ""),
+            topic=profile.get("topic", ""),
+            page=1,
+            agentic=True,
+        )
+
+    def _get_course_detail_text(self, from_number: str, item_number: int) -> str:
+        query = self._last_queries.get(from_number, {})
+        page_courses = query.get("last_courses") or []
+        start = int(query.get("last_start", 0))
+        index = item_number - start - 1
+        if index < 0 or index >= len(page_courses):
+            return "找不到這個編號。請先傳 *課程*，再回覆例如 *詳情1*。"
+
+        c = page_courses[index]
+        title = self._course_value(c, "name", "未命名課程")
+        date_str = self._course_value(c, "date")
+        topic = self._course_value(c, "topic")
+        target = self._course_value(c, "target")
+        link = self._course_value(c, "detail_url")
+        lines = [f"🔎 *{title}*"]
+        if date_str:
+            lines.append(f"📅 {date_str}")
+        tags = " | ".join([v for v in [topic, target] if v])
+        if tags:
+            lines.append(f"🏷️ {tags}")
+        if link:
+            lines.append(f"🔗 {link}")
+        return "\n".join(lines)
+
     def _handle_text_message(self, from_number: str, text: str) -> None:
         """處理家長發送的文字消息"""
         text_lower = text.strip().lower()
+        normalized = text.strip().lower().replace(" ", "")
         logger.info(f"收到消息 from={from_number}: {text}")
 
         # 關鍵詞匹配
-        age_group = detect_age_group(text)
+        if normalized in RESET_KEYWORDS:
+            self._profiles.pop(from_number, None)
+            self._last_queries.pop(from_number, None)
+            self._send_text(from_number, "已重設。你可以回覆：*小朋友幾歲，想找哪類課程*。")
+            return
+
+        profile = self._update_profile_from_text(from_number, text)
+        age_group = detect_age_group(text) or detect_child_age_group(text)
+        target = detect_target(text)
+        topic = detect_topic(text)
         page_request = self._parse_page_request(text)
-        if age_group:
-            self._last_queries[from_number] = {"age_group": age_group, "page": 1}
-            reply = self._get_courses_text(age_group=age_group, page=1)
+        detail_request = self._parse_detail_request(text)
+        if detail_request is not None:
+            reply = self._get_course_detail_text(from_number, detail_request)
+        elif age_group or target or topic:
+            reply = self._get_agentic_recommendation_text(from_number, profile, text)
         elif page_request is not None:
-            query = self._last_queries.get(from_number, {"age_group": "", "page": 1})
+            if from_number not in self._last_queries:
+                reply = self._get_agentic_recommendation_text(from_number, profile, text)
+                self._send_text(from_number, reply)
+                return
+            query = self._last_queries[from_number]
             if page_request == -1:
                 query["page"] = int(query.get("page", 1)) + 1
             else:
                 query["page"] = page_request
-            self._last_queries[from_number] = query
             reply = self._get_courses_text(
+                from_number=from_number,
                 age_group=str(query.get("age_group", "")),
+                target=str(query.get("target", "")),
+                topic=str(query.get("topic", "")),
                 page=int(query.get("page", 1)),
+                agentic=bool(query.get("age_group") or query.get("target") or query.get("topic")),
             )
-        elif any(k in text_lower for k in ["課程", "course", "最新"]):
-            self._last_queries[from_number] = {"age_group": "", "page": 1}
-            reply = self._get_courses_text(page=1)
+        elif self._is_all_courses_request(text):
+            reply = self._get_courses_text(from_number=from_number, page=1)
+        elif self._is_course_intent(text):
+            reply = self._get_agentic_recommendation_text(from_number, profile, text)
         elif any(k in text_lower for k in ["報名", "報名表", "報名連結"]):
             reply = (
                 "📝 *報名方式*\n\n"
@@ -254,8 +608,12 @@ class WhatsAppHandler:
             reply = (
                 "👋 你好！我是澳門家長學堂課程助手。\n\n"
                 "你可以發送以下關鍵詞：\n"
-                "• *課程* / *最新* — 查看最新課程列表\n"
+                "• *小朋友1歲，想親子活動* — 讓我按情境推薦\n"
+                "• *推薦* / *幫我揀* — 用已知偏好推薦\n"
+                "• *全部課程* — 查看精簡課程列表\n"
+                "• *詳情1* — 查看某個課程連結\n"
                 "• *更多* / *下一頁* — 查看下一批課程\n"
+                "• *重設* — 清除本次偏好\n"
                 "• *報名* — 獲取報名資訊\n\n"
                 "有什麼可以幫你的嗎？"
             )
@@ -263,10 +621,11 @@ class WhatsAppHandler:
             reply = (
                 "🤔 我不太明白你的意思。\n\n"
                 "試試發送：\n"
-                "• *課程* — 查看最新課程\n"
-                "• *更多* — 查看下一批課程\n"
-                "• *報名* — 報名資訊\n"
-                "• *你好* — 查看幫助"
+                "• *小朋友1歲，想親子活動* — 我幫你推薦\n"
+                "• *幫我揀* — 按已知偏好推薦\n"
+                "• *全部課程* — 看精簡列表\n"
+                "• *詳情1* — 查看報名連結\n"
+                "• *重設* — 重新設定偏好"
             )
 
         self._send_text(from_number, reply)
