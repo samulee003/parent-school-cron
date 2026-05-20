@@ -117,15 +117,15 @@ class WhatsAppHandlerTests(unittest.TestCase):
         self.assertIn("小朋友1歲", sent[0][1])
         self.assertNotIn("嬰幼繪本氹氹轉", sent[0][1])
 
-    def test_all_courses_returns_compact_course_objects_without_links(self):
+    def test_all_courses_returns_compact_course_objects_with_links(self):
         handler, sent = self.make_handler()
 
         handler._handle_text_message("85360000000", "全部課程")
 
         self.assertIn("嬰幼繪本氹氹轉", sent[0][1])
         self.assertIn("青少年親子溝通工作坊", sent[0][1])
-        self.assertNotIn("https://example.test/course/c1", sent[0][1])
-        self.assertIn("回覆 *詳情1* 看報名連結", sent[0][1])
+        self.assertIn("https://example.test/course/c1", sent[0][1])
+        self.assertNotIn("回覆 *詳情1* 看報名連結", sent[0][1])
 
     def test_courses_keyword_supports_zeabur_bot_scraper_shape(self):
         handler = WhatsAppHandler()
@@ -226,6 +226,7 @@ class WhatsAppHandlerTests(unittest.TestCase):
 
         self.assertIn("嬰幼繪本氹氹轉", sent[0][1])
         self.assertIn("為什麼推薦", sent[0][1])
+        self.assertIn("https://example.test/course/c1", sent[0][1])
         self.assertNotIn("青少年親子溝通工作坊", sent[0][1])
 
     def test_age_query_uses_age_specific_source_not_only_open_list(self):
@@ -237,6 +238,7 @@ class WhatsAppHandlerTests(unittest.TestCase):
         handler._handle_text_message("85360000000", "青少年")
 
         self.assertIn("健康情緒與青少年同行", sent[0][1])
+        self.assertIn("https://example.test/course/c2", sent[0][1])
         self.assertNotIn("嬰幼繪本氹氹轉", sent[0][1])
 
     def test_deepseek_is_used_for_agentic_recommendation_when_configured(self):
@@ -249,7 +251,7 @@ class WhatsAppHandlerTests(unittest.TestCase):
                     "choices": [
                         {
                             "message": {
-                                "content": "我會先推介 1. 嬰幼繪本氹氹轉。回覆 詳情1 看連結。"
+                                "content": "我會先推介 1. 嬰幼繪本氹氹轉。🔗 https://example.test/course/c1"
                             }
                         }
                     ]
@@ -258,11 +260,14 @@ class WhatsAppHandlerTests(unittest.TestCase):
                 handler._handle_text_message("85360000000", "小朋友1歲，想親子活動")
 
         self.assertIn("我會先推介", sent[0][1])
-        self.assertIn("詳情1", sent[0][1])
+        self.assertIn("https://example.test/course/c1", sent[0][1])
+        self.assertNotIn("詳情1", sent[0][1])
         self.assertTrue(post.called)
         payload = post.call_args.kwargs["json"]
         self.assertEqual(payload["model"], "deepseek-v4-flash")
         self.assertEqual(payload["thinking"], {"type": "disabled"})
+        user_payload = json.loads(payload["messages"][1]["content"])
+        self.assertIn("detail_url", user_payload["候選課程"][0])
 
     def test_meta_signature_verification(self):
         body = b'{"object":"whatsapp_business_account"}'

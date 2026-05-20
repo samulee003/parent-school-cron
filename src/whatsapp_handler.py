@@ -415,7 +415,7 @@ class WhatsAppHandler:
             ]
             if agentic:
                 lines.append(
-                    "我先挑最貼近你條件的少量選項；想看連結再回覆 *詳情編號*。"
+                    "我先挑最貼近你條件的少量選項，報名連結直接附在下面。"
                 )
             if page == 1 and not any([age_group, target, topic]):
                 lines.append(
@@ -435,6 +435,7 @@ class WhatsAppHandler:
                 course_topic = self._course_value(c, "topic")
                 course_target = self._course_value(c, "target")
                 status = self._course_value(c, "status")
+                link = self._course_value(c, "detail_url")
                 lines.append(f"\n*{i}. {title}*")
                 if date_str:
                     lines.append(f"📅 {date_str}")
@@ -443,6 +444,8 @@ class WhatsAppHandler:
                     lines.append(f"🏷️ {tags}")
                 if status:
                     lines.append(f"狀態：{status}")
+                if link:
+                    lines.append(f"🔗 {link}")
                 if agentic:
                     reason_bits = []
                     if age_group and (
@@ -456,7 +459,6 @@ class WhatsAppHandler:
                         reason_bits.append(f"主題是{topic}")
                     if reason_bits:
                         lines.append(f"為什麼推薦：{'、'.join(reason_bits)}")
-                lines.append(f"回覆 *詳情{i}* 看報名連結")
 
             remaining = len(courses) - (start + len(page_courses))
             if remaining > 0:
@@ -478,6 +480,7 @@ class WhatsAppHandler:
             "topic": self._course_value(course, "topic"),
             "target": self._course_value(course, "target"),
             "status": self._course_value(course, "status"),
+            "detail_url": self._course_value(course, "detail_url"),
         }
 
     def _available_age_summary(self, courses: List[Any]) -> str:
@@ -609,7 +612,8 @@ class WhatsAppHandler:
                         "你要先理解家長情境，再從候選課程中挑少量選項。"
                         "只能根據候選課程回答，不可創造課程、日期、名額或連結。"
                         "最多推薦 3 個課程。每個推薦要有一句人話理由。"
-                        "不要貼 URL；請叫用戶回覆「詳情1」這類編號看報名連結。"
+                        "每個推薦都要直接貼上候選課程提供的 detail_url 報名連結。"
+                        "不要叫用戶再回覆「詳情1」才看連結。"
                         "如果資料不足，只問 1 個最關鍵問題。"
                         "用繁體中文，口吻自然、簡短、像真人助手，不要像公告。"
                     ),
@@ -740,7 +744,6 @@ class WhatsAppHandler:
                 "• *小朋友1歲，想親子活動* — 讓我按情境推薦\n"
                 "• *推薦* / *幫我揀* — 用已知偏好推薦\n"
                 "• *全部課程* — 查看精簡課程列表\n"
-                "• *詳情1* — 查看某個課程連結\n"
                 "• *更多* / *下一頁* — 查看下一批課程\n"
                 "• *重設* — 清除本次偏好\n"
                 "• *報名* — 獲取報名資訊\n\n"
@@ -753,7 +756,6 @@ class WhatsAppHandler:
                 "• *小朋友1歲，想親子活動* — 我幫你推薦\n"
                 "• *幫我揀* — 按已知偏好推薦\n"
                 "• *全部課程* — 看精簡列表\n"
-                "• *詳情1* — 查看報名連結\n"
                 "• *重設* — 重新設定偏好"
             )
 
