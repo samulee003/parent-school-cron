@@ -54,6 +54,11 @@ class FakeBot:
         self.crawler = FakeCrawler()
 
 
+class FakeZeaburBotShape:
+    def __init__(self):
+        self.scraper = FakeCrawler()
+
+
 class WhatsAppHandlerTests(unittest.TestCase):
     def make_handler(self):
         handler = WhatsAppHandler()
@@ -71,6 +76,17 @@ class WhatsAppHandlerTests(unittest.TestCase):
         self.assertIn("嬰幼繪本氹氹轉", sent[0][1])
         self.assertIn("青少年親子溝通工作坊", sent[0][1])
         self.assertIn("https://example.test/course/c1", sent[0][1])
+
+    def test_courses_keyword_supports_zeabur_bot_scraper_shape(self):
+        handler = WhatsAppHandler()
+        handler._get_bot = lambda: FakeZeaburBotShape()
+        sent = []
+        handler._send_text = lambda to, text: sent.append((to, text)) or True
+
+        handler._handle_text_message("85360000000", "課程")
+
+        self.assertEqual(sent[0][0], "85360000000")
+        self.assertIn("嬰幼繪本氹氹轉", sent[0][1])
 
     def test_age_keyword_filters_courses(self):
         handler, sent = self.make_handler()

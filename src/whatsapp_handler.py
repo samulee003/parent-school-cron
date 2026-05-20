@@ -17,7 +17,11 @@ from scraper import AGE_GROUP_LABELS
 logger = logging.getLogger("whatsapp_handler")
 
 # WhatsApp Cloud API 配置
-GRAPH_API_BASE = "https://graph.facebook.com/v20.0"
+def get_graph_api_base() -> str:
+    version = os.environ.get("WHATSAPP_API_VERSION", "v25.0").strip() or "v25.0"
+    if not version.startswith("v"):
+        version = f"v{version}"
+    return f"https://graph.facebook.com/{version}"
 
 
 AGE_KEYWORDS = {
@@ -79,7 +83,7 @@ class WhatsAppHandler:
     def __init__(self):
         self.phone_number_id = get_phone_number_id()
         self.access_token = get_access_token()
-        self.api_url = f"{GRAPH_API_BASE}/{self.phone_number_id}/messages"
+        self.api_url = f"{get_graph_api_base()}/{self.phone_number_id}/messages"
         self._bot: Optional[ZeaburBot] = None
 
     def _get_bot(self) -> Optional[ZeaburBot]:
@@ -90,6 +94,12 @@ class WhatsAppHandler:
             except Exception as e:
                 logger.warning(f"課程 bot 初始化失敗: {e}")
         return self._bot
+
+    def _get_course_source(self):
+        bot = self._get_bot()
+        if not bot:
+            return None
+        return getattr(bot, "scraper", None) or getattr(bot, "crawler", None)
 
     def _send_text(self, to: str, text: str) -> bool:
         """發送文字消息到指定 WhatsApp 號碼"""
@@ -131,12 +141,12 @@ class WhatsAppHandler:
 
     def _get_courses_text(self, age_group: str = "") -> str:
         """獲取課程列表文字"""
-        bot = self._get_bot()
-        if not bot or not bot.crawler:
+        course_source = self._get_course_source()
+        if not course_source:
             return "課程資料暫時無法取得，請稍後再試。"
 
         try:
-            courses = bot.crawler.fetch_all_open_courses(max_retries=2, delay=1.0)
+            courses = course_source.fetch_all_open_courses(max_retries=2, delay=1.0)
             if age_group:
                 courses = [
                     c for c in courses
