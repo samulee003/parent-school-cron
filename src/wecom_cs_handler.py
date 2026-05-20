@@ -181,7 +181,7 @@ class CSMessageHandler:
 
         # 模糊匹配，給提示
         return (
-            f「收到「{text}」\n\n"
+            f"收到「{text}」\n\n"
             "不太確定您的意思，您可以試試：\n"
             "• **課程** — 查看最新活動\n"
             "• **0-2歲** / **3-6歲** — 按年齡查詢\n"
@@ -263,14 +263,14 @@ class CSMessageHandler:
             age_courses = by_age.get(target_age, [])
 
             if not age_courses:
-                return f「📭 暫無 {AGE_GROUP_LABELS.get(target_age, target_age)} 的報名中課程。"
+                return f"📭 暫無 {AGE_GROUP_LABELS.get(target_age, target_age)} 的報名中課程。"
 
             weekly = self.classifier.filter_by_week(age_courses, week_offset=0)
             if not weekly:
                 weekly = self.classifier.filter_upcoming(age_courses, days=14)
 
             if not weekly:
-                return f「📭 未來兩週暫無 {AGE_GROUP_LABELS.get(target_age, target_age)} 的課程。"
+                return f"📭 未來兩週暫無 {AGE_GROUP_LABELS.get(target_age, target_age)} 的課程。"
 
             return self._format_single_age_reply(target_age, weekly)
 
@@ -290,15 +290,15 @@ class CSMessageHandler:
                 continue
             age_courses = weekly[age]
             label = AGE_GROUP_LABELS.get(age, age)
-            lines.append(f「**{label}** — {len(age_courses)} 個活動")
+            lines.append(f"**{label}** — {len(age_courses)} 個活動")
             lines.append("")
 
             for c in age_courses[:3]:
-                lines.append(f「• {c.name}」)
+                lines.append(f"• {c.name}")
                 if c.date and c.date != "詳見活動內容":
-                    lines.append(f「  📅 {c.date}」)
+                    lines.append(f"  📅 {c.date}")
                 if c.location:
-                    lines.append(f「  📍 {c.location}」)
+                    lines.append(f"  📍 {c.location}")
                 lines.append("")
 
         lines.append("輸入年齡層可查看詳情，如「0-2歲」")
@@ -308,20 +308,20 @@ class CSMessageHandler:
         """格式化單一年齡層課程回覆"""
         label = AGE_GROUP_LABELS.get(age, age)
         lines = [
-            f「📚 **{label} 課程**",
+            f"📚 **{label} 課程**",
             "",
         ]
 
         for c in courses[:5]:
-            lines.append(f「**{c.name}**」)
+            lines.append(f"**{c.name}**")
             if c.date and c.date != "詳見活動內容":
-                lines.append(f「  📅 {c.date}」)
+                lines.append(f"  📅 {c.date}")
             if c.location:
-                lines.append(f「  📍 {c.location}」)
+                lines.append(f"  📍 {c.location}")
             tags = [t for t in [c.topic, c.target] if t]
             if tags:
-                lines.append(f「  🏷️ {' | '.join(tags)}」)
-            lines.append(f「  🟢 {c.status}」)
+                lines.append(f"  🏷️ {' | '.join(tags)}")
+            lines.append(f"  🟢 {c.status}")
             lines.append("")
 
         return "\n".join(lines)
@@ -368,10 +368,10 @@ class CSMessageHandler:
         user.is_active = True
         self.store.upsert_user(user)
 
-        labels = [f「{AGE_GROUP_LABELS[a]}（{a}）" for a in selected]
+        labels = [f"{AGE_GROUP_LABELS[a]}（{a}）" for a in selected]
         return (
-            f「✅ 設定完成！\n\n"
-            f「👶 訂閱年齡: {', '.join(labels)}\n\n"
+            f"✅ 設定完成！\n\n"
+            f"👶 訂閱年齡: {', '.join(labels)}\n\n"
             "有新課程時會主動通知您。\n"
             "輸入「課程」可隨時查看最新活動。"
         )
@@ -382,13 +382,13 @@ class CSMessageHandler:
         if not user or not user.child_age_groups:
             return "❓ 您還沒有設定訂閱。\n\n請輸入「修改 年齡層」進行設定"
 
-        labels = [f「{AGE_GROUP_LABELS[a]}（{a}）" for a in user.child_age_groups]
+        labels = [f"{AGE_GROUP_LABELS[a]}（{a}）" for a in user.child_age_groups]
         status = "✅ 已啟用" if user.is_active else "⏸️ 已暫停"
 
         return (
-            f「📋 **您的設定**\n\n"
-            f「👶 訂閱年齡: {', '.join(labels)}\n"
-            f「📬 推送狀態: {status}\n\n"
+            f"📋 **您的設定**\n\n"
+            f"👶 訂閱年齡: {', '.join(labels)}\n"
+            f"📬 推送狀態: {status}\n\n"
             "輸入「修改」可調整設定"
         )
 
@@ -408,8 +408,8 @@ class CSMessageHandler:
             self.store.upsert_user(user)
             labels = [AGE_GROUP_LABELS.get(a, a) for a in user.child_age_groups]
             return (
-                f「✅ 已恢復推送！\n\n"
-                f「訂閱年齡: {', '.join(labels)}\n"
+                f"✅ 已恢復推送！\n\n"
+                f"訂閱年齡: {', '.join(labels)}\n"
                 "有新課程時會通知您。"
             )
         return "請先設定訂閱年齡：輸入「修改 0-2歲」"
