@@ -202,6 +202,33 @@ class WhatsAppHandlerTests(unittest.TestCase):
         self.assertIn("課程6", sent[1][1])
         self.assertNotIn("課程7", sent[1][1])
 
+    def test_next_page_accepts_haiyouma_question(self):
+        courses = [
+            Course(
+                id=f"c{i}",
+                name=f"課程{i}",
+                date="2026/06/20 星期六 15:00-16:00",
+                date_parsed=None,
+                age_group="0-2歲",
+                topic="家庭關係",
+                target="親子",
+                status="報名中",
+                detail_url=f"https://example.test/course/c{i}",
+            )
+            for i in range(1, 8)
+        ]
+        handler = WhatsAppHandler()
+        handler._get_bot = lambda: type("Bot", (), {"scraper": FakeCrawler(courses)})()
+        sent = []
+        handler._send_text = lambda to, text: sent.append((to, text)) or True
+
+        handler._handle_text_message("85360000000", "全部課程")
+        handler._handle_text_message("85360000000", "還有嗎？")
+
+        self.assertIn("第 2/3 頁", sent[1][1])
+        self.assertIn("課程4", sent[1][1])
+        self.assertNotIn("課程1", sent[1][1])
+
     def test_detail_request_returns_link_for_visible_course(self):
         handler, sent = self.make_handler()
 

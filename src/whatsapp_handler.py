@@ -34,7 +34,7 @@ AGE_KEYWORDS = {
 }
 
 PAGE_SIZE = 3
-NEXT_PAGE_KEYWORDS = {"更多", "下一頁", "下頁", "more", "next"}
+NEXT_PAGE_KEYWORDS = {"更多", "下一頁", "下頁", "還有嗎", "還有沒有", "還有", "more", "next"}
 ALL_COURSE_KEYWORDS = {"全部課程", "全部", "all"}
 RESET_KEYWORDS = {"重設", "重新設定", "reset"}
 
@@ -208,7 +208,7 @@ class WhatsAppHandler:
 
     @staticmethod
     def _parse_page_request(text: str) -> Optional[int]:
-        normalized = text.strip().lower().replace(" ", "")
+        normalized = re.sub(r"[\s\?？!！。,.、，；;:：]+", "", text.strip().lower())
         if normalized in NEXT_PAGE_KEYWORDS:
             return -1
         match = re.search(r"(?:第)?(\d+)(?:頁|页|page)?", normalized)
