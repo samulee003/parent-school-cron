@@ -21,11 +21,13 @@ from pydantic import BaseModel
 from bot_webhook import ZeaburBot
 from wecom_cs_handler import CSMessageHandler
 from wecom_crypto import WeComCrypto
+from wecom_poller import WeComPoller
 
 # 全局實例
 bot: Optional[ZeaburBot] = None
 cs_handler: Optional[CSMessageHandler] = None
 cs_crypto: Optional[WeComCrypto] = None
+poller: Optional[WeComPoller] = None
 
 
 def get_bot() -> ZeaburBot:
@@ -87,17 +89,36 @@ class StatusResponse(BaseModel):
 app = FastAPI(
     title="家長學堂課程推送 Bot",
     description="Zeabur 部署的企業微信客服課程推送服務",
-    version="2.1.0",
+    version="2.2.0",
 )
 
 
 @app.on_event("startup")
 async def startup():
     """啟動時初始化"""
+    global poller
     logger.info("API Server 啟動...")
     get_bot()
-    get_cs_handler()
+    handler = get_cs_handler()
     get_cs_crypto()
+
+    # 如果有 WeCom CS API 配置，啟動輪詢
+    if handler.api:
+        poll_interval = int(os.environ.get("WECOM_POLL_INTERVAL", "5"))
+        poller = WeComPoller(handler, poll_interval=poll_interval)
+        poller.start()
+        logger.info("WeCom CS 輪詢模式已啟動（無需回調 URL）")
+    else:
+        logger.warning("WeCom CS API 未配置，輪詢未啟動")
+
+
+@app.on_event("shutdown")
+async def shutdown():
+    """關閉時清理"""
+    global poller
+    if poller:
+        poller.stop()
+        logger.info("輪詢器已停止")
 
 
 @app.get("/")
@@ -106,7 +127,7 @@ async def root():
     return {
         "status": "ok",
         "service": "家長學堂課程推送 Bot",
-        "version": "2.1.0",
+        "version": "2.2.0",
         "time": datetime.now().isoformat(),
     }
 
@@ -116,11 +137,14 @@ async def health():
     """健康檢查端點"""
     b = get_bot()
     stats = b.store.get_stats()
-    return {
+    result = {
         "status": "healthy",
         "webhook_configured": bool(b.webhook_url),
         "users": stats,
     }
+    if poller:
+        result["poller"] = poller.get_status()
+    return result
 
 
 @app.get("/api/status")
