@@ -380,7 +380,7 @@ async def whatsapp_webhook_verify(
 
 
 @app.post("/api/whatsapp/webhook")
-async def whatsapp_webhook(request: Request):
+async def whatsapp_webhook(request: Request, background_tasks: BackgroundTasks):
     """
     WhatsApp 消息接收（POST）
 
@@ -403,7 +403,8 @@ async def whatsapp_webhook(request: Request):
             return PlainTextResponse(content="ok")
 
         data = json.loads(body.decode("utf-8") or "{}")
-        handler.handle_webhook(data)
+        if handler.claim_webhook_messages(data):
+            background_tasks.add_task(handler.handle_webhook, data, True)
         return PlainTextResponse(content="ok")
     except HTTPException:
         raise

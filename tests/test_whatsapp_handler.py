@@ -459,6 +459,32 @@ class WhatsAppHandlerTests(unittest.TestCase):
         self.assertEqual(len(sent), 1)
         self.assertIn("嬰幼繪本氹氹轉", sent[0][1])
 
+    def test_claim_webhook_messages_prevents_duplicate_background_work(self):
+        handler, _ = self.make_handler()
+        payload = {
+            "entry": [
+                {
+                    "changes": [
+                        {
+                            "value": {
+                                "messages": [
+                                    {
+                                        "id": "wamid.test-claim-1",
+                                        "type": "text",
+                                        "from": "85360000000",
+                                        "text": {"body": "小朋友1歲，想親子活動"},
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                }
+            ]
+        }
+
+        self.assertTrue(handler.claim_webhook_messages(payload))
+        self.assertFalse(handler.claim_webhook_messages(payload))
+
     def test_detail_request_returns_link_for_visible_course(self):
         handler, sent = self.make_handler()
 
@@ -542,9 +568,69 @@ class WhatsAppHandlerTests(unittest.TestCase):
         os.environ["WHATSAPP_APP_SECRET"] = "app-secret"
         try:
             with self.assertRaises(HTTPException) as ctx:
-                asyncio.run(api_server.whatsapp_webhook(request))
+                asyncio.run(api_server.whatsapp_webhook(request, api_server.BackgroundTasks()))
             self.assertEqual(ctx.exception.status_code, 403)
         finally:
+            if old_secret is None:
+                os.environ.pop("WHATSAPP_APP_SECRET", None)
+            else:
+                os.environ["WHATSAPP_APP_SECRET"] = old_secret
+
+    def test_whatsapp_webhook_schedules_processing_in_background(self):
+        payload = {
+            "entry": [
+                {
+                    "changes": [
+                        {
+                            "value": {
+                                "messages": [
+                                    {
+                                        "id": "wamid.test-background-1",
+                                        "type": "text",
+                                        "from": "85360000000",
+                                        "text": {"body": "小朋友1歲，想親子活動"},
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                }
+            ]
+        }
+        request = FakeRequest(json.dumps(payload).encode("utf-8"), {})
+
+        class FakeWhatsAppHandler:
+            def __init__(self):
+                self.claimed = False
+                self.handled = False
+                self.preclaimed = False
+
+            def claim_webhook_messages(self, data):
+                self.claimed = data == payload
+                return True
+
+            def handle_webhook(self, data, messages_preclaimed=False):
+                self.handled = data == payload
+                self.preclaimed = messages_preclaimed
+
+        fake_handler = FakeWhatsAppHandler()
+        old_get_wa_handler = api_server.get_wa_handler
+        old_secret = os.environ.get("WHATSAPP_APP_SECRET")
+        os.environ.pop("WHATSAPP_APP_SECRET", None)
+        api_server.get_wa_handler = lambda: fake_handler
+        background_tasks = api_server.BackgroundTasks()
+        try:
+            response = asyncio.run(api_server.whatsapp_webhook(request, background_tasks))
+            self.assertEqual(response.body, b"ok")
+            self.assertTrue(fake_handler.claimed)
+            self.assertFalse(fake_handler.handled)
+            self.assertEqual(len(background_tasks.tasks), 1)
+
+            asyncio.run(background_tasks())
+            self.assertTrue(fake_handler.handled)
+            self.assertTrue(fake_handler.preclaimed)
+        finally:
+            api_server.get_wa_handler = old_get_wa_handler
             if old_secret is None:
                 os.environ.pop("WHATSAPP_APP_SECRET", None)
             else:

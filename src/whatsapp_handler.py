@@ -884,37 +884,59 @@ class WhatsAppHandler:
 
         self._send_text(from_number, reply)
 
-    def handle_webhook(self, data: dict) -> None:
-        """處理 Meta 發來的 webhook 事件"""
-        logger.info(f"收到 WhatsApp webhook: {data}")
-
-        # 提取消息
+    @staticmethod
+    def _iter_webhook_messages(data: dict):
         entries = data.get("entry", [])
         for entry in entries:
             changes = entry.get("changes", [])
             for change in changes:
                 value = change.get("value", {})
                 messages = value.get("messages", [])
-
                 for msg in messages:
-                    msg_id = msg.get("id", "")
-                    msg_type = msg.get("type")
-                    from_number = msg.get("from")
-                    if msg_id and not self._memory.claim_message(msg_id, from_number or ""):
-                        logger.info("略過已處理 WhatsApp 訊息: %s", msg_id)
-                        continue
+                    yield msg
 
-                    if msg_type == "text":
-                        text_body = msg.get("text", {}).get("body", "")
-                        if from_number and text_body:
-                            self._handle_text_message(from_number, text_body)
-                    else:
-                        # 非文字消息（圖片、語音等），回覆提示
-                        if from_number:
-                            self._send_text(
-                                from_number,
-                                "抱歉，我目前只支援文字消息查詢課程。\n請發送 *課程* 查看最新課程資訊。"
-                            )
+    def claim_webhook_messages(self, data: dict) -> bool:
+        """Claim incoming message ids before background processing.
+
+        Returns True when there is at least one new message worth processing.
+        """
+        has_new_message = False
+        for msg in self._iter_webhook_messages(data):
+            msg_id = msg.get("id", "")
+            from_number = msg.get("from")
+            if msg_id and not self._memory.claim_message(msg_id, from_number or ""):
+                logger.info("略過已處理 WhatsApp 訊息: %s", msg_id)
+                continue
+            has_new_message = True
+        return has_new_message
+
+    def handle_webhook(self, data: dict, messages_preclaimed: bool = False) -> None:
+        """處理 Meta 發來的 webhook 事件"""
+        logger.info(f"收到 WhatsApp webhook: {data}")
+
+        for msg in self._iter_webhook_messages(data):
+            msg_id = msg.get("id", "")
+            msg_type = msg.get("type")
+            from_number = msg.get("from")
+            if (
+                not messages_preclaimed
+                and msg_id
+                and not self._memory.claim_message(msg_id, from_number or "")
+            ):
+                logger.info("略過已處理 WhatsApp 訊息: %s", msg_id)
+                continue
+
+            if msg_type == "text":
+                text_body = msg.get("text", {}).get("body", "")
+                if from_number and text_body:
+                    self._handle_text_message(from_number, text_body)
+            else:
+                # 非文字消息（圖片、語音等），回覆提示
+                if from_number:
+                    self._send_text(
+                        from_number,
+                        "抱歉，我目前只支援文字消息查詢課程。\n請發送 *課程* 查看最新課程資訊。"
+                    )
 
     @staticmethod
     def verify_challenge(
