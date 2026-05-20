@@ -60,6 +60,45 @@ class FakeZeaburBotShape:
         self.scraper = FakeCrawler()
 
 
+class FakeAcademyCrawler:
+    def __init__(self):
+        self.open_courses = [
+            Course(
+                id="c1",
+                name="嬰幼繪本氹氹轉",
+                date="2026/06/20 星期六 15:00-16:00",
+                date_parsed=None,
+                age_group="0-2歲",
+                topic="家庭關係",
+                target="親子",
+                status="報名中",
+                detail_url="https://example.test/course/c1",
+            )
+        ]
+        self.teen_courses = [
+            Course(
+                id="c2",
+                name="健康情緒與青少年同行",
+                date="2026/05/31 星期日 10:30-12:00",
+                date_parsed=None,
+                age_group="13-18歲",
+                age_groups=["13-18歲"],
+                topic="身心健康",
+                target="家長",
+                status="報名中",
+                detail_url="https://example.test/course/c2",
+            )
+        ]
+
+    def fetch_all_open_courses(self, max_retries=3, delay=1.0):
+        return list(self.open_courses)
+
+    def fetch_courses(self, age_group="", status="", max_retries=3, delay=1.0):
+        if age_group == "13-18歲":
+            return list(self.teen_courses)
+        return list(self.open_courses)
+
+
 class WhatsAppHandlerTests(unittest.TestCase):
     def make_handler(self):
         handler = WhatsAppHandler()
@@ -188,6 +227,17 @@ class WhatsAppHandlerTests(unittest.TestCase):
         self.assertIn("嬰幼繪本氹氹轉", sent[0][1])
         self.assertIn("為什麼推薦", sent[0][1])
         self.assertNotIn("青少年親子溝通工作坊", sent[0][1])
+
+    def test_age_query_uses_age_specific_source_not_only_open_list(self):
+        handler = WhatsAppHandler()
+        handler._get_bot = lambda: type("Bot", (), {"scraper": FakeAcademyCrawler()})()
+        sent = []
+        handler._send_text = lambda to, text: sent.append((to, text)) or True
+
+        handler._handle_text_message("85360000000", "青少年")
+
+        self.assertIn("健康情緒與青少年同行", sent[0][1])
+        self.assertNotIn("嬰幼繪本氹氹轉", sent[0][1])
 
     def test_deepseek_is_used_for_agentic_recommendation_when_configured(self):
         handler, sent = self.make_handler()

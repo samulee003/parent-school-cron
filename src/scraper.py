@@ -44,6 +44,7 @@ class Course:
     status: str
     detail_url: str
     week_number: int = 0
+    age_groups: List[str] = field(default_factory=list)
 
 
 class CourseScraper:
@@ -255,6 +256,7 @@ class CourseScraper:
                 date=date_str,
                 date_parsed=date_parsed,
                 age_group=age_group[0] if age_group else "",
+                age_groups=age_group,
                 topic=topic_list[0] if topic_list else "",
                 target=target_list[0] if target_list else "",
                 status=status,

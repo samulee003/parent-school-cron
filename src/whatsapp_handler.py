@@ -195,6 +195,18 @@ class WhatsAppHandler:
         return str(getattr(course, attr, fallback) or fallback)
 
     @staticmethod
+    def _course_values(course: Any, attr: str) -> List[str]:
+        if isinstance(course, dict):
+            value = course.get(attr, [])
+        else:
+            value = getattr(course, attr, [])
+        if isinstance(value, list):
+            return [str(v) for v in value if v]
+        if value:
+            return [str(value)]
+        return []
+
+    @staticmethod
     def _parse_page_request(text: str) -> Optional[int]:
         normalized = text.strip().lower().replace(" ", "")
         if normalized in NEXT_PAGE_KEYWORDS:
@@ -246,7 +258,10 @@ class WhatsAppHandler:
         if age_group:
             courses = [
                 c for c in courses
-                if self._course_value(c, "age_group") == age_group
+                if (
+                    self._course_value(c, "age_group") == age_group
+                    or age_group in self._course_values(c, "age_groups")
+                )
             ]
         if target:
             courses = [
@@ -260,13 +275,64 @@ class WhatsAppHandler:
             ]
         return courses
 
+    def _course_key(self, course: Any) -> str:
+        course_id = self._course_value(course, "id")
+        if course_id:
+            return f"id:{course_id}"
+        return "|".join([
+            self._course_value(course, "name"),
+            self._course_value(course, "date"),
+            self._course_value(course, "age_group"),
+        ])
+
+    def _dedupe_courses(self, courses: List[Any]) -> List[Any]:
+        seen = set()
+        unique = []
+        for course in courses:
+            key = self._course_key(course)
+            if key in seen:
+                continue
+            seen.add(key)
+            unique.append(course)
+        return unique
+
+    def _fetch_courses(self, course_source: Any, age_group: str = "") -> List[Any]:
+        if hasattr(course_source, "fetch_courses"):
+            if age_group:
+                return course_source.fetch_courses(
+                    age_group=age_group,
+                    status="",
+                    max_retries=2,
+                    delay=1.0,
+                )
+
+            courses = []
+            for age in AGE_GROUP_LABELS:
+                try:
+                    courses.extend(course_source.fetch_courses(
+                        age_group=age,
+                        status="",
+                        max_retries=2,
+                        delay=1.0,
+                    ))
+                except Exception as e:
+                    logger.warning("抓取 %s 課程失敗: %s", age, e)
+            if courses:
+                return self._dedupe_courses(courses)
+
+        return course_source.fetch_all_open_courses(max_retries=2, delay=1.0)
+
     def _update_profile_from_text(self, from_number: str, text: str) -> Dict[str, str]:
         profile = dict(self._profiles.get(from_number, {}))
         age_group = detect_age_group(text) or detect_child_age_group(text)
         target = detect_target(text)
         topic = detect_topic(text)
         if age_group:
+            previous_age = profile.get("age_group", "")
             profile["age_group"] = age_group
+            if previous_age and previous_age != age_group and not target and not topic:
+                profile.pop("target", None)
+                profile.pop("topic", None)
         if target:
             profile["target"] = target
         if topic:
@@ -322,7 +388,7 @@ class WhatsAppHandler:
             return "課程資料暫時無法取得，請稍後再試。"
 
         try:
-            courses = course_source.fetch_all_open_courses(max_retries=2, delay=1.0)
+            courses = self._fetch_courses(course_source, age_group=age_group)
             courses = self._filter_courses(courses, age_group, target, topic)
 
             if not courses:
@@ -366,17 +432,23 @@ class WhatsAppHandler:
             for i, c in enumerate(page_courses, start + 1):
                 title = self._course_value(c, "name", "未命名課程")
                 date_str = self._course_value(c, "date")
-                topic = self._course_value(c, "topic")
-                target = self._course_value(c, "target")
+                course_topic = self._course_value(c, "topic")
+                course_target = self._course_value(c, "target")
+                status = self._course_value(c, "status")
                 lines.append(f"\n*{i}. {title}*")
                 if date_str:
                     lines.append(f"📅 {date_str}")
-                tags = " | ".join([v for v in [topic, target] if v])
+                tags = " | ".join([v for v in [course_topic, course_target] if v])
                 if tags:
                     lines.append(f"🏷️ {tags}")
+                if status:
+                    lines.append(f"狀態：{status}")
                 if agentic:
                     reason_bits = []
-                    if age_group and self._course_value(c, "age_group") == age_group:
+                    if age_group and (
+                        self._course_value(c, "age_group") == age_group
+                        or age_group in self._course_values(c, "age_groups")
+                    ):
                         reason_bits.append("年齡吻合")
                     if target and self._course_value(c, "target") == target:
                         reason_bits.append(f"適合{target}")
@@ -402,9 +474,57 @@ class WhatsAppHandler:
             "name": self._course_value(course, "name"),
             "date": self._course_value(course, "date"),
             "age_group": self._course_value(course, "age_group"),
+            "age_groups": self._course_values(course, "age_groups"),
             "topic": self._course_value(course, "topic"),
             "target": self._course_value(course, "target"),
+            "status": self._course_value(course, "status"),
         }
+
+    def _available_age_summary(self, courses: List[Any]) -> str:
+        counts: Dict[str, int] = {}
+        for course in courses:
+            age_groups = self._course_values(course, "age_groups") or [self._course_value(course, "age_group") or "未標明"]
+            for age_group in age_groups:
+                counts[age_group] = counts.get(age_group, 0) + 1
+
+        parts = []
+        for age_group in AGE_GROUP_LABELS:
+            count = counts.get(age_group, 0)
+            if count:
+                label = AGE_GROUP_LABELS.get(age_group, age_group)
+                parts.append(f"{label}（{age_group}）{count}個")
+        if counts.get("未標明"):
+            parts.append(f"未標明年齡{counts['未標明']}個")
+        return "、".join(parts) if parts else "暫時沒有報名中課程"
+
+    def _no_match_text(self, profile: Dict[str, str], courses: List[Any]) -> str:
+        age_group = profile.get("age_group", "")
+        target = profile.get("target", "")
+        topic = profile.get("topic", "")
+        filters = []
+        if age_group:
+            filters.append(f"{AGE_GROUP_LABELS.get(age_group, age_group)}（{age_group}）")
+        if target:
+            filters.append(target)
+        if topic:
+            filters.append(topic)
+
+        if age_group:
+            age_courses = self._filter_courses(courses, age_group=age_group)
+            if not age_courses:
+                return (
+                    f"我查了目前報名中的課程，暫時沒有 *{AGE_GROUP_LABELS.get(age_group, age_group)}（{age_group}）* "
+                    "適用的課程。\n\n"
+                    f"現在有的年齡層是：{self._available_age_summary(courses)}。\n"
+                    "你可以回覆其他年齡層，例如 *0-2歲*、*3-6歲*，或回覆 *全部課程* 看現有列表。"
+                )
+
+        filter_text = " / ".join(filters) if filters else "這些條件"
+        return (
+            f"我查了目前報名中的課程，暫時沒有完全符合 *{filter_text}* 的選項。\n\n"
+            f"現在有的年齡層是：{self._available_age_summary(courses)}。\n"
+            "你可以放寬一個條件再試，例如只回覆年齡層，或回覆 *全部課程* 看現有列表。"
+        )
 
     def _call_deepseek(self, messages: List[Dict[str, str]], max_tokens: int = 650) -> Optional[str]:
         api_key = get_deepseek_api_key()
@@ -452,15 +572,21 @@ class WhatsAppHandler:
             return None
 
         try:
-            courses = course_source.fetch_all_open_courses(max_retries=2, delay=1.0)
+            requested_age = profile.get("age_group", "")
+            courses = self._fetch_courses(course_source, age_group=requested_age)
             filtered = self._filter_courses(
                 courses,
-                profile.get("age_group", ""),
+                requested_age,
                 profile.get("target", ""),
                 profile.get("topic", ""),
             )
             if not filtered:
-                filtered = courses
+                age_group = requested_age
+                has_secondary_filter = bool(profile.get("target") or profile.get("topic"))
+                if age_group and has_secondary_filter:
+                    filtered = self._filter_courses(courses, age_group=age_group)
+                if not filtered:
+                    return self._no_match_text(profile, courses)
 
             candidates = filtered[:8]
             self._last_queries[from_number] = {
@@ -541,6 +667,7 @@ class WhatsAppHandler:
         date_str = self._course_value(c, "date")
         topic = self._course_value(c, "topic")
         target = self._course_value(c, "target")
+        status = self._course_value(c, "status")
         link = self._course_value(c, "detail_url")
         lines = [f"🔎 *{title}*"]
         if date_str:
@@ -548,6 +675,8 @@ class WhatsAppHandler:
         tags = " | ".join([v for v in [topic, target] if v])
         if tags:
             lines.append(f"🏷️ {tags}")
+        if status:
+            lines.append(f"狀態：{status}")
         if link:
             lines.append(f"🔗 {link}")
         return "\n".join(lines)
