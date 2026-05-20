@@ -1,6 +1,6 @@
 """FastAPI HTTP 服務器 — Zeabur 適配
 
-接收企業微信群機器人回調，提供管理接口
+接收企業微信客服回調，提供管理接口
 """
 
 import logging
@@ -15,13 +15,17 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 logger = logging.getLogger("api_server")
 
-from fastapi import FastAPI, Request, BackgroundTasks, HTTPException
+from fastapi import FastAPI, Request, BackgroundTasks, HTTPException, Query
 from fastapi.responses import JSONResponse, PlainTextResponse
 from pydantic import BaseModel
 from bot_webhook import ZeaburBot
+from wecom_cs_handler import CSMessageHandler
+from wecom_crypto import WeComCrypto
 
-# 全局 Bot 實例
+# 全局實例
 bot: Optional[ZeaburBot] = None
+cs_handler: Optional[CSMessageHandler] = None
+cs_crypto: Optional[WeComCrypto] = None
 
 
 def get_bot() -> ZeaburBot:
@@ -29,6 +33,28 @@ def get_bot() -> ZeaburBot:
     if bot is None:
         bot = ZeaburBot()
     return bot
+
+
+def get_cs_handler() -> CSMessageHandler:
+    global cs_handler
+    if cs_handler is None:
+        cs_handler = CSMessageHandler()
+    return cs_handler
+
+
+def get_cs_crypto() -> Optional[WeComCrypto]:
+    global cs_crypto
+    if cs_crypto is None:
+        aes_key = os.environ.get("WECOM_ENCODING_AES_KEY", "")
+        token = os.environ.get("WECOM_TOKEN", "")
+        corp_id = os.environ.get("WECOM_CORP_ID", "")
+        if aes_key and token and corp_id:
+            try:
+                cs_crypto = WeComCrypto(aes_key, token, corp_id)
+                logger.info("WeCom crypto 初始化成功")
+            except Exception as e:
+                logger.warning(f"WeCom crypto 初始化失敗: {e}")
+    return cs_crypto
 
 
 # ============== Pydantic 模型 ==============
@@ -60,8 +86,8 @@ class StatusResponse(BaseModel):
 
 app = FastAPI(
     title="家長學堂課程推送 Bot",
-    description="Zeabur 部署的企業微信群機器人課程推送服務",
-    version="2.0.0",
+    description="Zeabur 部署的企業微信客服課程推送服務",
+    version="2.1.0",
 )
 
 
@@ -70,6 +96,8 @@ async def startup():
     """啟動時初始化"""
     logger.info("API Server 啟動...")
     get_bot()
+    get_cs_handler()
+    get_cs_crypto()
 
 
 @app.get("/")
@@ -78,7 +106,7 @@ async def root():
     return {
         "status": "ok",
         "service": "家長學堂課程推送 Bot",
-        "version": "2.0.0",
+        "version": "2.1.0",
         "time": datetime.now().isoformat(),
     }
 
@@ -182,6 +210,89 @@ async def api_users():
             for u in users
         ],
     }
+
+
+# ============== 企業微信客服回調 ==============
+
+@app.get("/api/wecom-cs/callback")
+async def wecom_cs_callback_verify(
+    msg_signature: str = Query(..., alias="msg_signature"),
+    timestamp: str = Query(...),
+    nonce: str = Query(...),
+    echostr: str = Query(...),
+):
+    """
+    企業微信客服回調 URL 驗證（GET）
+
+    企業微信後台配置回調 URL 時，會發送 GET 請求驗證
+    需要解密 echostr 並返回明文
+    """
+    crypto = get_cs_crypto()
+    if not crypto:
+        logger.warning("WeCom crypto 未初始化，無法驗證回調")
+        raise HTTPException(status_code=500, detail="Crypto not configured")
+
+    try:
+        # 驗證簽名
+        if not crypto.verify_signature(msg_signature, timestamp, nonce, echostr):
+            logger.warning("回調簽名驗證失敗")
+            raise HTTPException(status_code=403, detail="Invalid signature")
+
+        # 解密 echostr
+        plaintext, corp_id = crypto.decrypt(echostr)
+        logger.info(f"回調驗證成功，corp_id={corp_id}")
+
+        # 返回明文
+        return PlainTextResponse(content=plaintext)
+
+    except Exception as e:
+        logger.exception(f"回調驗證失敗: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/wecom-cs/callback")
+async def wecom_cs_callback(
+    request: Request,
+    msg_signature: str = Query(..., alias="msg_signature"),
+    timestamp: str = Query(...),
+    nonce: str = Query(...),
+):
+    """
+    企業微信客服事件回調（POST）
+
+    接收加密的事件推送，解密後處理
+    """
+    crypto = get_cs_crypto()
+    if not crypto:
+        logger.warning("WeCom crypto 未初始化，無法處理事件")
+        raise HTTPException(status_code=500, detail="Crypto not configured")
+
+    try:
+        # 讀取 POST body
+        post_data = await request.body()
+        post_data_str = post_data.decode("utf-8")
+        logger.info(f"收到加密事件: {post_data_str[:200]}...")
+
+        # 解密
+        event_data = crypto.decrypt_event_msg(msg_signature, timestamp, nonce, post_data_str)
+        logger.info(f"解密後事件: {event_data}")
+
+        # 處理事件
+        handler = get_cs_handler()
+        result = handler.handle_event(event_data)
+
+        # 如果有需要回覆的內容（被動回覆）
+        if result:
+            # 加密回覆
+            encrypt_xml = crypto.encrypt_msg(result, timestamp, nonce)
+            return PlainTextResponse(content=encrypt_xml, media_type="application/xml")
+
+        return PlainTextResponse(content="success")
+
+    except Exception as e:
+        logger.exception(f"事件處理失敗: {e}")
+        # 即使處理失敗，也返回 success，避免企業微信重試
+        return PlainTextResponse(content="success")
 
 
 # ============== 啟動 ==============

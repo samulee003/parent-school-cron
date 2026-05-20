@@ -1,0 +1,33 @@
+{
+  "name": "parent-school-cron",
+  "description": "家長學堂課程推送 Bot — 企業微信客服",
+  "type": "python",
+  "main": "src/api_server.py",
+  "env": [
+    {
+      "key": "WECOM_CORP_ID",
+      "description": "企業微信 CorpID",
+      "required": true
+    },
+    {
+      "key": "WECOM_CS_SECRET",
+      "description": "微信客服應用 Secret",
+      "required": true
+    },
+    {
+      "key": "WECOM_TOKEN",
+      "description": "回調 Token",
+      "required": true
+    },
+    {
+      "key": "WECOM_ENCODING_AES_KEY",
+      "description": "EncodingAESKey (43字符)",
+      "required": true
+    },
+    {
+      "key": "CRON_SECRET",
+      "description": "Cron 觸發密鑰",
+      "required": true
+    }
+  ]
+}
