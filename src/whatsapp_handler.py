@@ -43,6 +43,24 @@ ALL_COURSE_KEYWORDS = {"全部課程", "全部", "all"}
 RESET_KEYWORDS = {"重設", "重新設定", "reset"}
 PROFILE_KEYWORDS = {"我的偏好", "偏好", "設定", "狀態", "profile"}
 NEGATION_WORDS = ("不要", "不用", "不想", "不是", "唔要", "唔係", "排除", "非")
+BARE_RECOMMENDATION_COMMANDS = {
+    "推薦", "推介", "有推薦嗎", "有推介嗎", "有咩推薦", "有咩推介",
+    "有冇推薦", "有冇推介", "幫我推薦", "幫我推介", "幫我揀", "幫我選",
+}
+COURSE_DOMAIN_KEYWORDS = (
+    "課程", "课程", "course", "家長學堂", "家长学堂", "活動", "活动",
+    "講座", "讲座", "工作坊", "報名", "报名", "親子", "亲子",
+    "家長", "家长", "小朋友", "孩子", "子女", "嬰幼", "婴幼",
+    "幼兒", "幼儿", "小學", "小学", "青少年", "中學", "中学",
+)
+OFF_TOPIC_KEYWORDS = (
+    "餐廳", "餐厅", "外賣", "外卖", "酒店", "機票", "机票", "航班",
+    "天氣", "天气", "股票", "投資", "投资", "幣", "币", "匯率", "汇率",
+    "作文", "翻譯", "翻译", "新聞", "新闻", "電影", "电影", "音樂", "音乐",
+    "遊戲", "游戏", "食譜", "食谱", "功課", "功课", "數學題", "数学题",
+    "醫生", "医生", "診所", "诊所", "藥", "药", "感冒", "python",
+    "javascript", "寫code", "写code", "寫程式", "写程序",
+)
 
 
 def get_phone_number_id() -> str:
@@ -274,8 +292,30 @@ class WhatsAppHandler:
 
     @staticmethod
     def _is_course_intent(text: str) -> bool:
+        normalized = WhatsAppHandler._normalize_command(text)
+        if normalized in BARE_RECOMMENDATION_COMMANDS:
+            return True
+
         text_lower = text.strip().lower()
-        return any(k in text_lower for k in ["課程", "course", "最新", "推薦", "幫我揀", "幫我選"])
+        has_domain = any(k in text_lower for k in COURSE_DOMAIN_KEYWORDS)
+        has_intent = any(
+            k in text_lower
+            for k in ["課程", "course", "最新", "推薦", "推介", "幫我揀", "幫我選", "報名", "搵", "找"]
+        )
+        return has_domain and has_intent
+
+    @staticmethod
+    def _is_off_topic_request(text: str) -> bool:
+        text_lower = text.strip().lower()
+        return any(k in text_lower for k in OFF_TOPIC_KEYWORDS)
+
+    @staticmethod
+    def _off_topic_text() -> str:
+        return (
+            "我目前只協助查詢和推薦 *澳門家長學堂課程*，"
+            "不會回答餐廳、天氣、投資、功課或其他無關問題。\n\n"
+            "你可以回覆：*小朋友13歲，想家長課*、*青少年課程*、*更多*。"
+        )
 
     @staticmethod
     def _is_all_courses_request(text: str) -> bool:
@@ -718,6 +758,9 @@ class WhatsAppHandler:
                     "content": (
                         "你是澳門家長學堂 WhatsApp agentic 課程助手。"
                         "你要先理解家長情境，再從候選課程中挑少量選項。"
+                        "只回答澳門家長學堂課程查詢；如果訊息要求餐廳、天氣、投資、"
+                        "功課、翻譯或任何無關內容，只能請對方改問家長學堂課程，"
+                        "不可順便回答無關問題。"
                         "只能根據候選課程回答，不可創造課程、日期、名額或連結。"
                         "最多推薦 3 個課程。每個推薦要有一句人話理由。"
                         "每個推薦都要直接貼上候選課程提供的 detail_url 報名連結。"
@@ -815,6 +858,10 @@ class WhatsAppHandler:
                 "你可以直接補充，例如：*不要親子，要家長課*、*只要青少年*、*想身心健康*。"
             )
             self._send_text(from_number, reply)
+            return
+
+        if self._is_off_topic_request(text):
+            self._send_text(from_number, self._off_topic_text())
             return
 
         profile = self._update_profile_from_text(from_number, text)

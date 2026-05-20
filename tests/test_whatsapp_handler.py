@@ -430,6 +430,40 @@ class WhatsAppHandlerTests(unittest.TestCase):
         self.assertIn("嬰幼繪本氹氹轉", sent[0][1])
         self.assertIn("為什麼推薦", sent[0][1])
 
+    def test_off_topic_recommendation_does_not_call_deepseek_after_profile_exists(self):
+        handler, sent = self.make_handler()
+
+        handler._handle_text_message("85360000000", "小朋友13歲")
+        with patch.dict(os.environ, {"DEEPSEEK_API_KEY": "test-key"}, clear=False):
+            with patch("whatsapp_handler.requests.post") as post:
+                handler._handle_text_message("85360000000", "推薦餐廳")
+
+        self.assertFalse(post.called)
+        self.assertIn("只協助查詢和推薦", sent[1][1])
+        self.assertIn("澳門家長學堂課程", sent[1][1])
+
+    def test_off_topic_message_with_child_age_does_not_call_deepseek_or_update_profile(self):
+        handler, sent = self.make_handler()
+
+        with patch.dict(os.environ, {"DEEPSEEK_API_KEY": "test-key"}, clear=False):
+            with patch("whatsapp_handler.requests.post") as post:
+                handler._handle_text_message("85360000000", "我小朋友13歲，想推薦餐廳")
+
+        self.assertFalse(post.called)
+        self.assertIn("只協助查詢和推薦", sent[0][1])
+        self.assertEqual(handler._load_profile("85360000000"), {})
+
+    def test_unrelated_latest_question_does_not_call_deepseek(self):
+        handler, sent = self.make_handler()
+
+        handler._handle_text_message("85360000000", "小朋友13歲")
+        with patch.dict(os.environ, {"DEEPSEEK_API_KEY": "test-key"}, clear=False):
+            with patch("whatsapp_handler.requests.post") as post:
+                handler._handle_text_message("85360000000", "最新電影有什麼推薦")
+
+        self.assertFalse(post.called)
+        self.assertIn("澳門家長學堂課程", sent[1][1])
+
     def test_duplicate_whatsapp_message_id_is_processed_once(self):
         handler, sent = self.make_handler()
         payload = {
