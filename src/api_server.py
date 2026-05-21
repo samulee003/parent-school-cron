@@ -709,20 +709,23 @@ async def admin_dashboard(request: Request):
   <style>
     :root {
       color-scheme: light;
-      --bg: #f4f6f2;
+      --bg: #eef2f5;
       --panel: #ffffff;
-      --panel-soft: #f9faf7;
-      --line: #d9ded2;
-      --line-soft: #e9ece4;
+      --panel-soft: #f7f9fb;
+      --line: #d8dee6;
+      --line-soft: #e8edf2;
       --ink: #17212b;
       --muted: #66737d;
       --faint: #8b969f;
       --brand: #0d7a56;
       --brand-dark: #075f43;
       --brand-soft: #e7f4ed;
+      --accent: #2563eb;
+      --accent-soft: #eaf1ff;
       --warn: #95621b;
       --warn-bg: #fff7e8;
       --danger: #a13b3b;
+      --danger-soft: #fff4f4;
       --shadow: 0 10px 30px rgba(23, 33, 43, .06);
     }
     * { box-sizing: border-box; }
@@ -730,7 +733,7 @@ async def admin_dashboard(request: Request):
     header { height: 60px; display: flex; align-items: center; justify-content: space-between; padding: 0 18px 0 22px; border-bottom: 1px solid var(--line); background: rgba(255,255,255,.92); backdrop-filter: blur(10px); position: sticky; top: 0; z-index: 2; }
     h1 { font-size: 18px; margin: 0; font-weight: 750; line-height: 1.2; }
     .subtle { color: var(--muted); font-size: 12px; margin-top: 2px; }
-    main { display: grid; grid-template-columns: 320px minmax(420px, 1fr) 380px; height: calc(100vh - 60px); min-height: 560px; }
+    main { display: grid; grid-template-columns: 350px minmax(480px, 1fr) 400px; height: calc(100vh - 60px); min-height: 560px; }
     aside, section { background: var(--panel); min-width: 0; }
     aside:first-child { border-right: 1px solid var(--line); }
     aside:last-child { border-left: 1px solid var(--line); }
@@ -738,8 +741,21 @@ async def admin_dashboard(request: Request):
     .toolbar { padding: 12px; border-bottom: 1px solid var(--line-soft); display: flex; gap: 8px; align-items: center; }
     .toolbar.stack { display: grid; grid-template-columns: 1fr; gap: 8px; }
     .tools { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-    .panel-title { display: flex; justify-content: space-between; align-items: center; gap: 10px; min-height: 44px; }
+    .inbox-head { padding: 14px; border-bottom: 1px solid var(--line-soft); background: #fff; display: grid; gap: 10px; }
+    .inbox-title { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+    .inbox-title strong { font-size: 15px; }
+    .queue-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+    .stat { border: 1px solid var(--line-soft); border-radius: 8px; padding: 9px; background: var(--panel-soft); }
+    .stat b { display: block; font-size: 17px; line-height: 1; }
+    .stat span { display: block; color: var(--muted); font-size: 11px; margin-top: 5px; }
+    .segments { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 4px; padding: 4px; background: #f2f5f7; border: 1px solid var(--line-soft); border-radius: 8px; }
+    .segment { min-height: 30px; padding: 4px 6px; border: 0; border-radius: 6px; color: var(--muted); background: transparent; font-size: 12px; }
+    .segment.active { background: #fff; color: var(--ink); box-shadow: 0 1px 3px rgba(23, 33, 43, .08); }
+    .panel-title { display: flex; justify-content: space-between; align-items: center; gap: 10px; min-height: 64px; background: rgba(255,255,255,.94); }
+    .chat-profile { display: flex; align-items: center; gap: 11px; min-width: 0; }
+    .avatar { width: 38px; height: 38px; border-radius: 999px; display: grid; place-items: center; background: linear-gradient(135deg, var(--brand-soft), var(--accent-soft)); color: var(--brand); font-weight: 800; border: 1px solid #c9d9e7; flex: 0 0 auto; }
     .chat-title { display: grid; gap: 2px; }
+    .chat-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
     input, textarea, button, select { font: inherit; }
     input, textarea, select { width: 100%; border: 1px solid var(--line); border-radius: 6px; padding: 9px 10px; background: #fff; color: var(--ink); outline: none; }
     input:focus, textarea:focus, select:focus { border-color: var(--brand); box-shadow: 0 0 0 3px rgba(13, 122, 86, .11); }
@@ -750,18 +766,26 @@ async def admin_dashboard(request: Request):
     button.primary:hover { background: var(--brand-dark); border-color: var(--brand-dark); }
     button.warn { border-color: #d8a948; color: var(--warn); background: var(--warn-bg); }
     button.ghost { color: var(--muted); background: transparent; }
-    .list { overflow: auto; height: calc(100vh - 234px); }
-    .row { padding: 13px 14px; border-bottom: 1px solid var(--line-soft); cursor: pointer; transition: background .12s ease, border-color .12s ease; }
-    .row:hover { background: #f7faf5; }
-    .row.active { background: var(--brand-soft); box-shadow: inset 3px 0 0 var(--brand); }
-    .phone { font-weight: 750; font-size: 14px; }
+    button.compact { padding: 7px 9px; font-size: 13px; }
+    .list { overflow: auto; height: calc(100vh - 370px); background: #fbfcfd; }
+    .row { padding: 12px 14px; border-bottom: 1px solid var(--line-soft); cursor: pointer; transition: background .12s ease, border-color .12s ease; background: #fff; }
+    .row:hover { background: #f7fafc; }
+    .row.active { background: #eef8f3; box-shadow: inset 3px 0 0 var(--brand); }
+    .row-main { display: grid; grid-template-columns: 34px 1fr; gap: 10px; align-items: start; }
+    .row .avatar { width: 34px; height: 34px; font-size: 12px; }
+    .row-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
+    .phone { font-weight: 750; font-size: 14px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .time { color: var(--faint); font-size: 11px; flex: 0 0 auto; }
     .latest { color: var(--muted); font-size: 13px; margin-top: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .row-meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
     .pill { display: inline-flex; align-items: center; min-height: 22px; font-size: 12px; border: 1px solid var(--line); border-radius: 999px; padding: 2px 8px; color: var(--muted); background: #fff; }
     .pill.human { color: var(--warn); border-color: #e0be75; background: var(--warn-bg); }
     .pill.ok { color: var(--brand); border-color: #a7d6bd; background: #eff9f3; }
-    .pill.alert { color: var(--danger); border-color: #e3b7b7; background: #fff4f4; }
-    .messages { padding: 18px 18px 20px; overflow: auto; height: calc(100vh - 220px); display: flex; flex-direction: column; gap: 12px; }
+    .pill.alert { color: var(--danger); border-color: #e3b7b7; background: var(--danger-soft); }
+    .pill.info { color: var(--accent); border-color: #bdd1fb; background: var(--accent-soft); }
+    .empty { height: 100%; display: grid; place-items: center; text-align: center; color: var(--muted); padding: 24px; }
+    .empty strong { display: block; color: var(--ink); font-size: 16px; margin-bottom: 6px; }
+    .messages { padding: 18px 18px 20px; overflow: auto; height: calc(100vh - 240px); display: flex; flex-direction: column; gap: 12px; }
     .bubble { max-width: min(78%, 720px); padding: 11px 13px; border-radius: 8px; line-height: 1.48; white-space: pre-wrap; word-break: break-word; border: 1px solid var(--line); box-shadow: 0 2px 8px rgba(23, 33, 43, .03); }
     .inbound { align-self: flex-start; background: #fff; }
     .outbound { align-self: flex-end; background: #e6f4ec; border-color: #b8dbc5; }
@@ -769,6 +793,13 @@ async def admin_dashboard(request: Request):
     .composer { padding: 12px; border-top: 1px solid var(--line); background: rgba(255,255,255,.95); display: grid; grid-template-columns: 1fr auto; gap: 8px; }
     .composer textarea { min-height: 74px; }
     .sidebody { height: calc(100vh - 60px); overflow: auto; padding: 14px; display: grid; gap: 12px; align-content: start; }
+    .profile-card { border: 1px solid var(--line-soft); border-radius: 8px; background: #fff; padding: 13px; display: grid; gap: 10px; }
+    .profile-top { display: flex; gap: 10px; align-items: center; min-width: 0; }
+    .profile-top .avatar { width: 42px; height: 42px; }
+    .profile-phone { font-weight: 800; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .profile-notes { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+    .metric { border-radius: 8px; background: var(--panel-soft); border: 1px solid var(--line-soft); padding: 9px; }
+    .metric strong { display: block; font-size: 13px; margin-bottom: 3px; }
     .kv { border: 1px solid var(--line-soft); border-radius: 8px; padding: 11px; background: #fff; }
     .kv.flat { border: 0; border-radius: 0; border-bottom: 1px solid var(--line-soft); padding: 0 0 10px; }
     .label { color: var(--muted); font-size: 12px; margin-bottom: 6px; font-weight: 700; }
@@ -798,6 +829,7 @@ async def admin_dashboard(request: Request):
       .messages { height: 420px; }
       .sidebody { grid-template-columns: 1fr; height: auto; }
       .composer { grid-template-columns: 1fr; }
+      .segments { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
   </style>
 </head>
@@ -811,8 +843,26 @@ async def admin_dashboard(request: Request):
   </header>
   <main>
     <aside>
+      <div class="inbox-head">
+        <div class="inbox-title">
+          <strong>Inbox</strong>
+          <span class="pill" id="conversationCount">0 對話</span>
+        </div>
+        <div class="queue-stats" id="queueStats">
+          <div class="stat"><b>0</b><span>待處理</span></div>
+          <div class="stat"><b>0</b><span>人工中</span></div>
+          <div class="stat"><b>0</b><span>可推送</span></div>
+        </div>
+      </div>
       <div class="toolbar stack">
         <input id="search" placeholder="搜尋電話、訊息、Profile" oninput="loadConversations()">
+        <div class="segments" id="filterSegments">
+          <button class="segment active" data-filter="" onclick="setConversationFilter('')">全部</button>
+          <button class="segment" data-filter="human" onclick="setConversationFilter('human')">接手</button>
+          <button class="segment" data-filter="ai" onclick="setConversationFilter('ai')">AI</button>
+          <button class="segment" data-filter="flagged" onclick="setConversationFilter('flagged')">待處理</button>
+          <button class="segment" data-filter="pushable" onclick="setConversationFilter('pushable')">可推送</button>
+        </div>
         <select id="filterStatus" onchange="loadConversations()">
           <option value="">全部對話</option>
           <option value="human">人工接手</option>
@@ -849,12 +899,19 @@ async def admin_dashboard(request: Request):
     </aside>
     <section>
       <div class="toolbar panel-title">
-        <div class="chat-title">
-          <strong id="chatTitle">未選擇對話</strong>
-          <span class="subtle">選擇左側家長後可查看完整上下文</span>
+        <div class="chat-profile">
+          <div class="avatar" id="chatAvatar">--</div>
+          <div class="chat-title">
+            <strong id="chatTitle">未選擇對話</strong>
+            <span class="subtle" id="chatSubline">選擇左側家長後可查看完整上下文</span>
+          </div>
+        </div>
+        <div class="chat-actions">
+          <button class="warn compact" onclick="takeover()">接手</button>
+          <button class="compact" onclick="resumeAi()">恢復 AI</button>
         </div>
       </div>
-      <div id="messages" class="messages"></div>
+      <div id="messages" class="messages"><div class="empty"><div><strong>選擇一位家長</strong><span>對話、AI 記憶和推送草稿會在這裡接上。</span></div></div></div>
       <div class="composer">
         <textarea id="reply" placeholder="人工回覆"></textarea>
         <button class="primary" onclick="sendReply()">傳送</button>
@@ -862,7 +919,19 @@ async def admin_dashboard(request: Request):
     </section>
     <aside>
       <div class="sidebody">
-        <div class="kv flat"><div class="label">狀態</div><div id="status">-</div></div>
+        <div class="profile-card">
+          <div class="profile-top">
+            <div class="avatar" id="profileAvatar">--</div>
+            <div style="min-width:0">
+              <div class="profile-phone" id="profilePhone">未選擇家長</div>
+              <div class="subtle" id="profileSummary">等待對話資料</div>
+            </div>
+          </div>
+          <div class="profile-notes">
+            <div><div class="label">狀態</div><div id="status">-</div></div>
+            <div><div class="label">同意</div><div id="consentBadge">-</div></div>
+          </div>
+        </div>
         <div class="kv"><div class="label">Agent State</div><div id="agentState" class="state">未選擇</div></div>
         <div style="display:flex; gap:8px; flex-wrap:wrap">
           <button class="warn" onclick="takeover()">人工接手</button>
@@ -938,6 +1007,54 @@ async def admin_dashboard(request: Request):
       map["'"] = "&#39;";
       return String(text || "").replace(/[&<>"']/g, c => map[c]);
     }
+    function avatarText(phone) {
+      const digits = String(phone || "").replace(/\\D/g, "");
+      return digits.slice(-2) || "--";
+    }
+    function formatTime(value) {
+      if (!value) return "";
+      const parsed = new Date(value);
+      if (Number.isNaN(parsed.getTime())) return String(value).slice(0, 10);
+      return parsed.toLocaleString("zh-Hant", {month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit"});
+    }
+    function consentLabel(status) {
+      if (status === "allowed") return ["可推送", "ok"];
+      if (status === "paused") return ["暫停", "human"];
+      return ["未同意", ""];
+    }
+    function compactProfileSummary(profile) {
+      const parts = [];
+      if ((profile.age_groups || []).length) parts.push((profile.age_groups || []).join("、"));
+      if ((profile.pain_points || []).length) parts.push((profile.pain_points || []).slice(0, 2).join("、"));
+      if (profile.topic) parts.push(profile.topic);
+      if (profile.target) parts.push(profile.target);
+      return parts.join(" · ") || "未建立完整 Profile";
+    }
+    function setConversationFilter(filter) {
+      document.getElementById("filterStatus").value = filter;
+      document.querySelectorAll("#filterSegments .segment").forEach(btn => {
+        btn.classList.toggle("active", btn.dataset.filter === filter);
+      });
+      loadConversations();
+    }
+    function syncFilterSegments() {
+      const filter = document.getElementById("filterStatus").value;
+      document.querySelectorAll("#filterSegments .segment").forEach(btn => {
+        btn.classList.toggle("active", btn.dataset.filter === filter);
+      });
+    }
+    function updateQueueStats() {
+      const total = conversations.length;
+      const flagged = conversations.reduce((sum, c) => sum + (Number(c.open_flags_count || 0) > 0 ? 1 : 0), 0);
+      const human = conversations.filter(c => c.status === "human").length;
+      const pushable = conversations.filter(c => c.consent_status === "allowed").length;
+      document.getElementById("conversationCount").textContent = `${total} 對話`;
+      document.getElementById("queueStats").innerHTML = `
+        <div class="stat"><b>${flagged}</b><span>待處理</span></div>
+        <div class="stat"><b>${human}</b><span>人工中</span></div>
+        <div class="stat"><b>${pushable}</b><span>可推送</span></div>
+      `;
+    }
     async function loadConversations() {
       const params = new URLSearchParams();
       params.set("limit", "100");
@@ -951,21 +1068,38 @@ async def admin_dashboard(request: Request):
       }
       const data = await api("/api/whatsapp/conversations?" + params.toString());
       conversations = data.conversations || [];
+      syncFilterSegments();
       renderList();
       if (currentPhone) await openChat(currentPhone);
     }
     function renderList() {
-      document.getElementById("list").innerHTML = conversations
-        .map(c => `<div class="row ${c.phone === currentPhone ? "active" : ""}" onclick="openChat('${esc(c.phone)}')">
-          <div class="phone">${esc(c.phone)}</div>
-          <div class="latest">${esc(c.latest_message || "")}</div>
-          <div class="row-meta">
-            <span class="pill ${c.status === "human" ? "human" : "ok"}">${c.status === "human" ? "人工接手" : "AI 自動"}</span>
-            <span class="pill ${c.consent_status === "allowed" ? "ok" : c.consent_status === "paused" ? "human" : ""}">${c.consent_status === "allowed" ? "可推送" : c.consent_status === "paused" ? "暫停推送" : "未同意"}</span>
-            ${Number(c.open_flags_count || 0) ? `<span class="pill alert">待處理 ${Number(c.open_flags_count || 0)}</span>` : ""}
-            ${Number(c.draft_count || 0) ? `<span class="pill">草稿 ${Number(c.draft_count || 0)}</span>` : ""}
+      updateQueueStats();
+      if (!conversations.length) {
+        document.getElementById("list").innerHTML = `<div class="empty"><div><strong>沒有符合條件的對話</strong><span>換個搜尋或篩選看看。</span></div></div>`;
+        return;
+      }
+      document.getElementById("list").innerHTML = conversations.map(c => {
+        const [consentText, consentClass] = consentLabel(c.consent_status);
+        return `<div class="row ${c.phone === currentPhone ? "active" : ""}" onclick="openChat('${esc(c.phone)}')">
+          <div class="row-main">
+            <div class="avatar">${esc(avatarText(c.phone))}</div>
+            <div style="min-width:0">
+              <div class="row-head">
+                <div class="phone">${esc(c.display_name || c.phone)}</div>
+                <div class="time">${esc(formatTime(c.last_message_at || c.updated_at))}</div>
+              </div>
+              <div class="latest">${esc(c.latest_message || c.recommended_action || "")}</div>
+              <div class="row-meta">
+                <span class="pill ${c.status === "human" ? "human" : "ok"}">${c.status === "human" ? "人工接手" : "AI 自動"}</span>
+                <span class="pill ${consentClass}">${esc(consentText)}</span>
+                ${c.profile_ready ? `<span class="pill info">Profile OK</span>` : ""}
+                ${Number(c.open_flags_count || 0) ? `<span class="pill alert">待處理 ${Number(c.open_flags_count || 0)}</span>` : ""}
+                ${Number(c.draft_count || 0) ? `<span class="pill">草稿 ${Number(c.draft_count || 0)}</span>` : ""}
+              </div>
+            </div>
           </div>
-        </div>`).join("");
+        </div>`;
+      }).join("");
     }
     function renderAgentState(state) {
       const readyClass = state.profile_ready ? "ready" : "missing";
@@ -1003,10 +1137,19 @@ async def admin_dashboard(request: Request):
     async function openChat(phone) {
       currentPhone = phone;
       const data = await api("/api/whatsapp/conversations/" + encodeURIComponent(phone));
-      document.getElementById("chatTitle").textContent = phone;
+      const profile = data.profile || {};
+      const conversation = data.conversation || {};
+      const [consentText, consentClass] = consentLabel(conversation.consent_status);
+      document.getElementById("chatAvatar").textContent = avatarText(phone);
+      document.getElementById("chatTitle").textContent = conversation.display_name || phone;
+      document.getElementById("chatSubline").textContent = compactProfileSummary(profile);
+      document.getElementById("profileAvatar").textContent = avatarText(phone);
+      document.getElementById("profilePhone").textContent = conversation.display_name || phone;
+      document.getElementById("profileSummary").textContent = compactProfileSummary(profile);
       document.getElementById("status").innerHTML = data.conversation.status === "human"
         ? `<span class="pill human">人工接手中</span>`
         : `<span class="pill ok">AI 自動回覆</span>`;
+      document.getElementById("consentBadge").innerHTML = `<span class="pill ${consentClass}">${esc(consentText)}</span>`;
       document.getElementById("tags").value = (data.conversation.tags || []).join(", ");
       document.getElementById("notes").value = data.conversation.notes || "";
       document.getElementById("consentStatus").value = data.conversation.consent_status || "unknown";
@@ -1030,10 +1173,10 @@ async def admin_dashboard(request: Request):
           <button onclick="sendQueuedDraft(${Number(d.id)})">發送</button>
           <button onclick="skipDraft(${Number(d.id)})">略過</button>
         </div>`).join("") : "目前沒有待發草稿";
-      document.getElementById("messages").innerHTML = (data.messages || []).map(m => `
+      document.getElementById("messages").innerHTML = (data.messages || []).length ? (data.messages || []).map(m => `
         <div class="bubble ${m.direction}">
           <div class="meta">${esc(m.source)} · ${esc(m.created_at)}</div>${esc(m.body)}
-        </div>`).join("");
+        </div>`).join("") : `<div class="empty"><div><strong>還沒有訊息</strong><span>可以先人工傳一則開場訊息。</span></div></div>`;
       renderList();
     }
     async function saveMeta() {
