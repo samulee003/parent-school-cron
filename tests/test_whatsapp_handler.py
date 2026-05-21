@@ -1526,6 +1526,60 @@ class WhatsAppHandlerTests(unittest.TestCase):
             else:
                 os.environ["ADMIN_SECRET"] = old_admin
 
+    def test_whatsapp_agent_tasks_queue_prioritizes_next_actions(self):
+        handler, _ = self.make_handler()
+        handler._handle_text_message("85360000000", "課程")
+        handler._handle_text_message("85360000001", "小朋友13歲，最近情緒壓力大")
+        handler._memory.update_conversation("85360000001", consent_status="allowed")
+        handler._memory.set_conversation_status("85360000001", "human")
+        handler._memory.add_agent_flag("85360000001", "handoff_needed", "需要人工判斷")
+        handler._memory.save_proactive_draft(
+            "85360000001",
+            "健康情緒與青少年同行草稿",
+            matches=[{"course": {"id": "c-health", "name": "健康情緒與青少年同行"}}],
+            profile={"pain_points": ["情緒壓力"]},
+        )
+
+        old_admin = os.environ.get("ADMIN_SECRET")
+        old_handler = api_server.wa_handler
+        old_memory = api_server.wa_memory
+        os.environ["ADMIN_SECRET"] = "admin-secret"
+        api_server.wa_handler = handler
+        api_server.wa_memory = handler._memory
+        try:
+            with self.assertRaises(HTTPException) as ctx:
+                asyncio.run(api_server.api_whatsapp_agent_tasks(
+                    request=self.admin_request(secret="", cookie="wrong-cookie"),
+                ))
+            self.assertEqual(ctx.exception.status_code, 401)
+
+            tasks = asyncio.run(api_server.api_whatsapp_agent_tasks(
+                request=self.admin_request(),
+            ))
+            task_types = [task["type"] for task in tasks["tasks"]]
+
+            self.assertGreaterEqual(tasks["total"], 5)
+            self.assertEqual(task_types[0], "review_flag")
+            self.assertIn("human_takeover", task_types)
+            self.assertIn("approve_draft", task_types)
+            self.assertIn("ask_age", task_types)
+            self.assertIn("ask_concern", task_types)
+            self.assertEqual(tasks["briefing"]["by_type"]["review_flag"], 1)
+            self.assertEqual(tasks["briefing"]["parents"], 2)
+
+            searched = asyncio.run(api_server.api_whatsapp_agent_tasks(
+                request=self.admin_request(),
+                search="85360000001",
+            ))
+            self.assertTrue(all(task["phone"] == "85360000001" for task in searched["tasks"]))
+        finally:
+            api_server.wa_handler = old_handler
+            api_server.wa_memory = old_memory
+            if old_admin is None:
+                os.environ.pop("ADMIN_SECRET", None)
+            else:
+                os.environ["ADMIN_SECRET"] = old_admin
+
     def test_whatsapp_admin_dashboard_contains_agent_inbox_controls(self):
         old_admin = os.environ.get("ADMIN_SECRET")
         os.environ["ADMIN_SECRET"] = "admin-secret"
@@ -1549,6 +1603,8 @@ class WhatsAppHandlerTests(unittest.TestCase):
             self.assertIn("filterSegments", html)
             self.assertIn("chatAvatar", html)
             self.assertIn("profileSummary", html)
+            self.assertIn("loadAgentTasks", html)
+            self.assertIn("agentTasks", html)
             self.assertIn("人工接手", html)
             self.assertIn("不確定隊列", html)
             self.assertIn("主動匹配草稿", html)

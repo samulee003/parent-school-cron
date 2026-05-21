@@ -332,6 +332,170 @@ def _filter_conversations(
     return filtered
 
 
+def _agent_task(
+    task_type: str,
+    phone: str,
+    priority: int,
+    title: str,
+    summary: str,
+    action: str,
+    conversation: Dict,
+    agent_state: Dict,
+    profile: Dict,
+) -> Dict:
+    return {
+        "type": task_type,
+        "phone": phone,
+        "priority": priority,
+        "title": title,
+        "summary": summary,
+        "action": action,
+        "conversation": conversation,
+        "agent_state": agent_state,
+        "profile": {
+            "age_groups": profile.get("age_groups", []),
+            "pain_points": profile.get("pain_points", []),
+            "target": profile.get("target", ""),
+            "topic": profile.get("topic", ""),
+            "pain_summary": profile.get("pain_summary", ""),
+        },
+    }
+
+
+def _build_agent_tasks_for_conversation(
+    store: WhatsAppMemoryStore,
+    conversation: Dict,
+) -> list[Dict]:
+    phone = str(conversation.get("phone", ""))
+    if not phone:
+        return []
+
+    profile = store.get_profile(phone)
+    state = _build_agent_state(store, phone, profile, conversation)
+    tasks: list[Dict] = []
+    open_flags = int(state.get("open_flags_count", 0) or 0)
+    draft_count = int(state.get("draft_count", 0) or 0)
+    consent_status = str(conversation.get("consent_status", "unknown") or "unknown")
+    missing_fields = set(state.get("missing_fields", []))
+
+    if open_flags:
+        tasks.append(_agent_task(
+            "review_flag",
+            phone,
+            100,
+            "處理 AI 不確定項目",
+            f"這位家長有 {open_flags} 個待處理 flag，需要人工判斷或修正記憶。",
+            "打開對話，查看右欄不確定隊列",
+            conversation,
+            state,
+            profile,
+        ))
+    if str(conversation.get("status", "ai")) == "human":
+        tasks.append(_agent_task(
+            "human_takeover",
+            phone,
+            90,
+            "人工接手中",
+            "AI 已暫停自動回覆，家長新訊息只會進 transcript。",
+            "完成人工回覆後恢復 AI",
+            conversation,
+            state,
+            profile,
+        ))
+    if "age_group" in missing_fields:
+        tasks.append(_agent_task(
+            "ask_age",
+            phone,
+            80,
+            "追問孩子年齡",
+            "Profile 還缺孩子年齡，暫時不適合主動推薦課程。",
+            "問：小朋友幾多歲？",
+            conversation,
+            state,
+            profile,
+        ))
+    if "concern" in missing_fields:
+        tasks.append(_agent_task(
+            "ask_concern",
+            phone,
+            75,
+            "追問家長痛點",
+            "Profile 還缺痛點或方向，推薦容易變成泛泛列表。",
+            "問：最近比較想處理情緒、學習、親子溝通，還是升學壓力？",
+            conversation,
+            state,
+            profile,
+        ))
+    if draft_count:
+        tasks.append(_agent_task(
+            "approve_draft",
+            phone,
+            70,
+            "審批主動推送草稿",
+            f"已有 {draft_count} 份待發草稿，等管理員確認內容。",
+            "打開草稿，修改後發送或略過",
+            conversation,
+            state,
+            profile,
+        ))
+    if state.get("profile_ready") and consent_status == "unknown":
+        tasks.append(_agent_task(
+            "ask_consent",
+            phone,
+            55,
+            "確認主動推送同意",
+            "家長記憶已足夠，但未確認是否願意之後收到提醒。",
+            "推薦後請家長回覆「同意推送」",
+            conversation,
+            state,
+            profile,
+        ))
+    if state.get("profile_ready") and consent_status == "allowed" and not draft_count:
+        tasks.append(_agent_task(
+            "generate_draft",
+            phone,
+            45,
+            "可產生主動匹配草稿",
+            "家長已同意推送，而且 Profile 足夠，可檢查是否有新課程可匹配。",
+            "按「主動匹配」產生待審草稿",
+            conversation,
+            state,
+            profile,
+        ))
+
+    return tasks
+
+
+def _build_agent_task_queue(
+    store: WhatsAppMemoryStore,
+    limit: int = 100,
+    search: str = "",
+) -> Dict:
+    conversations = _filter_conversations(
+        store,
+        store.list_conversations(limit=max(limit, 200)),
+        search=search,
+    )
+    tasks: list[Dict] = []
+    for conversation in conversations:
+        tasks.extend(_build_agent_tasks_for_conversation(store, conversation))
+    tasks.sort(key=lambda task: (
+        int(task.get("priority", 0)),
+        str(task.get("conversation", {}).get("last_message_at", "")),
+    ), reverse=True)
+    tasks = tasks[:max(1, min(int(limit or 100), 200))]
+    by_type: Dict[str, int] = {}
+    for task in tasks:
+        task_type = str(task.get("type", ""))
+        by_type[task_type] = by_type.get(task_type, 0) + 1
+    briefing = {
+        "total_tasks": len(tasks),
+        "parents": len({task.get("phone") for task in tasks if task.get("phone")}),
+        "by_type": by_type,
+    }
+    return {"total": len(tasks), "tasks": tasks, "briefing": briefing}
+
+
 # ============== FastAPI 應用 ==============
 
 app = FastAPI(
@@ -874,6 +1038,7 @@ async def admin_dashboard(request: Request):
       </div>
       <div class="toolbar tools">
         <button onclick="loadFlags()">不確定隊列</button>
+        <button onclick="loadAgentTasks()">Agent 任務</button>
         <button onclick="loadMatches()">主動匹配</button>
         <button onclick="loadDrafts('draft')">待發草稿</button>
         <button onclick="loadDrafts('all')">推送紀錄</button>
@@ -970,6 +1135,7 @@ async def admin_dashboard(request: Request):
         </div>
         <div class="kv"><details><summary class="label">原始 Profile JSON</summary><pre id="profile">{}</pre></details></div>
         <div class="kv"><div class="label">上次查詢</div><pre id="lastQuery">{}</pre></div>
+        <div class="kv"><div class="label">Agent 任務隊列</div><div id="agentTasks" class="mini">尚未載入</div></div>
         <div class="kv"><div class="label">不確定隊列</div><div id="flags" class="mini">尚未載入</div></div>
         <div class="kv"><div class="label">主動匹配草稿</div><div id="matches" class="mini">尚未產生</div></div>
         <div class="kv stack">
@@ -1070,6 +1236,7 @@ async def admin_dashboard(request: Request):
       conversations = data.conversations || [];
       syncFilterSegments();
       renderList();
+      loadAgentTasks().catch(() => {});
       if (currentPhone) await openChat(currentPhone);
     }
     function renderList() {
@@ -1238,6 +1405,42 @@ async def admin_dashboard(request: Request):
     async function resolveFlag(id) {
       await api("/api/whatsapp/flags/" + id + "/resolve", {method: "POST"});
       await loadFlags();
+    }
+    function taskTypeLabel(type) {
+      const labels = {
+        review_flag: "待人工判斷",
+        human_takeover: "人工接手",
+        ask_age: "追問年齡",
+        ask_concern: "追問痛點",
+        approve_draft: "審批草稿",
+        ask_consent: "確認同意",
+        generate_draft: "可產生草稿"
+      };
+      return labels[type] || type;
+    }
+    async function loadAgentTasks() {
+      const q = document.getElementById("search").value.trim();
+      const params = new URLSearchParams();
+      params.set("limit", "100");
+      if (q) params.set("search", q);
+      const data = await api("/api/whatsapp/agent-tasks?" + params.toString());
+      const tasks = data.tasks || [];
+      const counts = (data.briefing || {}).by_type || {};
+      const countLine = Object.entries(counts).map(([key, value]) => `${taskTypeLabel(key)}: ${value}`).join(" · ");
+      document.getElementById("agentTasks").innerHTML = tasks.length ? `
+        <div class="state" style="margin-bottom:8px">
+          <div>任務：${Number(data.total || 0)} · 家長：${Number((data.briefing || {}).parents || 0)}</div>
+          <div>${esc(countLine || "無分類")}</div>
+        </div>
+        ${tasks.map(t => `
+          <div class="flag">
+            <strong>${esc(t.title)} · ${esc(t.phone)}</strong>
+            <div>${esc(t.summary)}</div>
+            <div class="mini">下一步：${esc(t.action)}</div>
+            <button onclick="openChat('${esc(t.phone)}')">打開對話</button>
+          </div>
+        `).join("")}
+      ` : "目前沒有需要處理的 agent 任務";
     }
     async function loadMatches() {
       const data = await api("/api/whatsapp/proactive-drafts/generate", {
@@ -1484,6 +1687,21 @@ async def api_whatsapp_flags(request: Request, unresolved_only: bool = True, lim
         limit=limit,
     )
     return {"total": len(flags), "flags": flags}
+
+
+@app.get("/api/whatsapp/agent-tasks")
+async def api_whatsapp_agent_tasks(
+    request: Request,
+    limit: int = 100,
+    search: str = "",
+):
+    """Return an operator action queue inferred from memory, flags, and drafts."""
+    require_admin_request(request)
+    return _build_agent_task_queue(
+        get_wa_memory_store(),
+        limit=limit,
+        search=search,
+    )
 
 
 @app.post("/api/whatsapp/flags/{flag_id}/resolve")
