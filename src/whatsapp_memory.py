@@ -5,7 +5,7 @@ import json
 import logging
 import os
 import sqlite3
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from threading import RLock
 from typing import Any, Dict, List
@@ -646,6 +646,8 @@ class WhatsAppMemoryStore:
         self,
         status: str = "draft",
         phone: str = "",
+        search: str = "",
+        consent_status: str = "",
         limit: int = 100,
     ) -> List[Dict[str, Any]]:
         limit = max(1, min(int(limit or 100), 300))
@@ -658,6 +660,29 @@ class WhatsAppMemoryStore:
         if phone:
             clauses.append("d.phone = ?")
             values.append(phone)
+        clean_consent = self._clean_consent_status(consent_status) if consent_status else ""
+        if clean_consent:
+            clauses.append("COALESCE(c.consent_status, 'unknown') = ?")
+            values.append(clean_consent)
+        query = str(search or "").strip()
+        if query:
+            like = f"%{query}%"
+            clauses.append(
+                """
+                (
+                    d.phone LIKE ?
+                    OR d.draft_text LIKE ?
+                    OR d.original_text LIKE ?
+                    OR d.sent_text LIKE ?
+                    OR d.matches_json LIKE ?
+                    OR d.profile_json LIKE ?
+                    OR COALESCE(c.tags_json, '') LIKE ?
+                    OR COALESCE(c.notes, '') LIKE ?
+                    OR COALESCE(c.proactive_notes, '') LIKE ?
+                )
+                """
+            )
+            values.extend([like] * 9)
         where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         values.append(limit)
         with self._lock:
@@ -682,6 +707,58 @@ class WhatsAppMemoryStore:
                     values,
                 ).fetchall()
         return [self._draft_row_to_dict(row) for row in rows]
+
+    def prune_private_history(self, older_than_days: int = 90, dry_run: bool = True) -> Dict[str, Any]:
+        """Count or delete old operational records while preserving parent profiles."""
+        days = max(1, min(int(older_than_days or 90), 3650))
+        cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+        targets = {
+            "messages": (
+                "whatsapp_messages",
+                "created_at < ?",
+                [cutoff],
+            ),
+            "llm_cache": (
+                "llm_response_cache",
+                "created_at < ?",
+                [cutoff],
+            ),
+            "processed_message_ids": (
+                "processed_whatsapp_messages",
+                "created_at < ?",
+                [cutoff],
+            ),
+            "resolved_flags": (
+                "whatsapp_agent_flags",
+                "resolved_at != '' AND created_at < ?",
+                [cutoff],
+            ),
+            "closed_proactive_drafts": (
+                "whatsapp_proactive_drafts",
+                "status IN ('sent', 'skipped', 'failed') AND updated_at < ?",
+                [cutoff],
+            ),
+        }
+        counts: Dict[str, int] = {}
+        with self._lock:
+            with closing(sqlite3.connect(str(self.db_path))) as conn:
+                for label, (table, where, values) in targets.items():
+                    row = conn.execute(
+                        f"SELECT COUNT(*) FROM {table} WHERE {where}",
+                        values,
+                    ).fetchone()
+                    counts[label] = int(row[0]) if row else 0
+                if not dry_run:
+                    for table, where, values in targets.values():
+                        conn.execute(f"DELETE FROM {table} WHERE {where}", values)
+                    conn.commit()
+        return {
+            "dry_run": bool(dry_run),
+            "older_than_days": days,
+            "cutoff": cutoff,
+            "counts": counts,
+            "total": sum(counts.values()),
+        }
 
     def get_proactive_draft(self, draft_id: int) -> Dict[str, Any]:
         if not draft_id:

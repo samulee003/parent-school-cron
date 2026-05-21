@@ -30,6 +30,8 @@
 - `/admin` 已有主動推送同意狀態：`unknown` / `allowed` / `paused`。
 - 已有 operator approval loop：主動匹配產生草稿，只有 `allowed` 家長可以由管理台批准發送。
 - 已有 persistent proactive draft queue/history：主動匹配可保存為待發草稿，管理台可編輯、發送、略過，並保留 AI 原始草稿、人工最後發送內容、課程匹配快照和狀態時間。
+- `/admin` 推送草稿已可按狀態、同意狀態和關鍵字搜尋，方便處理待發草稿與歷史紀錄。
+- `/admin` 已有隱私清理入口，可先預覽再清理舊 transcript、LLM cache、WhatsApp 去重紀錄、已解決 flags 和已關閉推送紀錄；不會刪家長 profile 或未發草稿。
 - WhatsApp 端已能直接更新主動推送同意：家長回覆 `同意推送` / `同意收課程提醒` 會變 `allowed`，回覆 `暫停推送` 會變 `paused`。
 - 已有 WhatsApp template 發送通道：主動草稿若超出 24 小時 customer service window，會自動改用 `WHATSAPP_PROACTIVE_TEMPLATE_NAME`；未配置模板時會阻止發送。
 - WhatsApp webhook 預設 fail-closed：缺 `WHATSAPP_APP_SECRET` 時拒絕處理 POST webhook；若線上仍未取得 Meta App Secret，可暫時明確設 `WHATSAPP_ALLOW_UNSIGNED_WEBHOOK=true` 維持舊行為，補上 App Secret 後要關掉。
@@ -68,7 +70,7 @@ python -B -m compileall src
 git diff --check
 ```
 
-最近一次已知測試數量：`80` 個 unittest 通過。
+最近一次已知測試數量：`82` 個 unittest 通過。
 
 2026-05-21 實站爬蟲驗證：
 
@@ -152,7 +154,6 @@ git diff --check
 ### Does not exist yet
 
 - Production Meta template approval is still pending in Meta review.
-- Richer proactive draft filters/history search beyond basic status listing.
 
 ## Recommended Next Build
 
@@ -173,9 +174,8 @@ Next useful build:
 
 1. Recheck Meta WhatsApp Manager until `parent_course_reminder` becomes approved/active.
 2. After approval, send one real outside-window template test from `/admin` or the proactive send API.
-3. Add richer proactive draft filters/history search beyond basic status listing.
-4. Add privacy retention/pruning for old transcripts and LLM cache entries.
-5. Observe real parent onboarding conversations and tune the wording if parents still ask for raw lists too often.
+3. Observe real parent onboarding conversations and tune the wording if parents still ask for raw lists too often.
+4. Add proactive campaign batching if more parents start consenting.
 
 Recommended table direction:
 

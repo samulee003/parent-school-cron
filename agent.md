@@ -241,8 +241,10 @@ Already started:
 - AI uncertainty and no-match flags.
 - Proactive matching draft endpoint based on stored memories and course summaries.
 - Persistent proactive draft queue/history: generate drafts, edit, send, skip, and inspect past sent/skipped/failed items.
+- Proactive draft queue filters by status, consent status, and search text so the operator can find pending/history items quickly.
 - Parent consent status for proactive pushes: `unknown`, `allowed`, `paused`.
 - Operator-approved proactive draft sending for parents with `allowed` consent.
+- Privacy pruning endpoint for old operational history: preview or delete old transcripts, LLM cache, processed message IDs, resolved flags, and closed proactive draft history while preserving parent profiles and open drafts.
 - WhatsApp-side consent capture: parents can reply `同意推送` / `同意收課程提醒`
   or `暫停推送`.
 - WhatsApp template send path for proactive drafts outside the 24-hour window.

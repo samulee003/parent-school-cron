@@ -224,6 +224,11 @@ class ProactiveDraftUpdateRequest(BaseModel):
     body: str = ""
 
 
+class PrivacyPruneRequest(BaseModel):
+    older_than_days: int = 90
+    dry_run: bool = True
+
+
 def _profile_options() -> Dict[str, list[str]]:
     return WhatsAppHandler.admin_profile_options()
 
@@ -700,6 +705,23 @@ async def admin_dashboard(request: Request):
         <button onclick="loadDrafts('draft')">待發草稿</button>
         <button onclick="loadDrafts('all')">推送紀錄</button>
       </div>
+      <div class="toolbar" style="display:grid; grid-template-columns: 1fr 1fr; gap:8px">
+        <select id="draftStatus">
+          <option value="draft">待發</option>
+          <option value="sent">已發送</option>
+          <option value="skipped">已略過</option>
+          <option value="failed">失敗</option>
+          <option value="all">全部紀錄</option>
+        </select>
+        <select id="draftConsent">
+          <option value="">全部同意狀態</option>
+          <option value="allowed">已同意</option>
+          <option value="unknown">未確認</option>
+          <option value="paused">已暫停</option>
+        </select>
+        <input id="draftSearch" placeholder="搜尋草稿、課程、電話">
+        <button onclick="loadDraftsFromControls()">查草稿</button>
+      </div>
       <div id="list" class="list"></div>
     </aside>
     <section>
@@ -753,6 +775,15 @@ async def admin_dashboard(request: Request):
         <div class="kv"><div class="label">上次查詢</div><pre id="lastQuery">{}</pre></div>
         <div class="kv"><div class="label">不確定隊列</div><div id="flags" class="mini">尚未載入</div></div>
         <div class="kv"><div class="label">主動匹配草稿</div><div id="matches" class="mini">尚未產生</div></div>
+        <div class="kv stack">
+          <div class="label">隱私清理</div>
+          <input id="retentionDays" type="number" min="1" max="3650" value="90">
+          <div class="mini" id="privacyResult">先預覽，再執行。Profile 和未發草稿不會被清掉。</div>
+          <div style="display:flex; gap:8px; flex-wrap:wrap">
+            <button onclick="prunePrivacy(true)">預覽</button>
+            <button class="warn" onclick="prunePrivacy(false)">清理舊紀錄</button>
+          </div>
+        </div>
       </div>
     </aside>
   </main>
@@ -955,8 +986,20 @@ async def admin_dashboard(request: Request):
           <button onclick="openChat('${esc(d.phone)}')">打開對話</button>
         </div>`).join("") : "目前沒有足夠記憶可主動匹配";
     }
-    async function loadDrafts(status = "draft") {
-      const data = await api("/api/whatsapp/proactive-drafts?status=" + encodeURIComponent(status));
+    async function loadDraftsFromControls() {
+      await loadDrafts(
+        document.getElementById("draftStatus").value || "draft",
+        document.getElementById("draftSearch").value.trim(),
+        document.getElementById("draftConsent").value
+      );
+    }
+    async function loadDrafts(status = "draft", search = "", consent = "") {
+      document.getElementById("draftStatus").value = status;
+      const params = new URLSearchParams();
+      params.set("status", status);
+      if (search) params.set("search", search);
+      if (consent) params.set("consent_status", consent);
+      const data = await api("/api/whatsapp/proactive-drafts?" + params.toString());
       const drafts = data.drafts || [];
       document.getElementById("matches").innerHTML = drafts.length ? drafts.map(d => `
         <div class="match">
@@ -980,6 +1023,18 @@ async def admin_dashboard(request: Request):
           ` : ""}
           <button onclick="openChat('${esc(d.phone)}')">打開對話</button>
         </div>`).join("") : "目前沒有草稿";
+    }
+    async function prunePrivacy(dryRun = true) {
+      const days = Number(document.getElementById("retentionDays").value || 90);
+      if (!dryRun && !confirm("確認清理 " + days + " 天前的舊訊息、LLM cache、已處理紀錄？")) return;
+      const data = await api("/api/whatsapp/privacy/prune", {
+        method: "POST",
+        body: JSON.stringify({older_than_days: days, dry_run: dryRun})
+      });
+      const counts = data.counts || {};
+      document.getElementById("privacyResult").textContent =
+        (dryRun ? "預覽：" : "已清理：") +
+        `訊息 ${counts.messages || 0}、LLM cache ${counts.llm_cache || 0}、去重紀錄 ${counts.processed_message_ids || 0}、已解決 flags ${counts.resolved_flags || 0}、舊推送紀錄 ${counts.closed_proactive_drafts || 0}`;
     }
     async function saveDraft(id) {
       const body = document.getElementById("draft-" + id).value.trim();
@@ -1274,6 +1329,8 @@ async def api_whatsapp_proactive_drafts(
     request: Request,
     status: str = "draft",
     phone: str = "",
+    search: str = "",
+    consent_status: str = "",
     limit: int = 100,
 ):
     """List persisted proactive drafts and send history."""
@@ -1281,9 +1338,25 @@ async def api_whatsapp_proactive_drafts(
     drafts = get_wa_memory_store().list_proactive_drafts(
         status=status,
         phone=phone,
+        search=search,
+        consent_status=consent_status,
         limit=limit,
     )
     return {"total": len(drafts), "drafts": drafts}
+
+
+@app.post("/api/whatsapp/privacy/prune")
+async def api_whatsapp_privacy_prune(
+    payload: PrivacyPruneRequest,
+    request: Request,
+):
+    """Preview or prune old private operational history without deleting profiles."""
+    require_admin_request(request)
+    result = get_wa_memory_store().prune_private_history(
+        older_than_days=payload.older_than_days,
+        dry_run=payload.dry_run,
+    )
+    return {"success": True, **result}
 
 
 @app.post("/api/whatsapp/proactive-drafts/{draft_id}")

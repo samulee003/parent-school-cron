@@ -1789,6 +1789,128 @@ class WhatsAppHandlerTests(unittest.TestCase):
             else:
                 os.environ["ADMIN_SECRET"] = old_admin
 
+    def test_proactive_draft_list_filters_search_and_consent(self):
+        handler, _sent = self.make_handler()
+        handler._memory.update_conversation(
+            "85360000000",
+            tags=["情緒壓力"],
+            consent_status="allowed",
+            proactive_notes="偏好青少年情緒課程",
+        )
+        handler._memory.update_conversation(
+            "85361111111",
+            tags=["親子溝通"],
+            consent_status="unknown",
+        )
+        first = handler._memory.save_proactive_draft(
+            "85360000000",
+            "健康情緒與青少年同行草稿",
+            matches=[{"course": {"id": "c-health", "name": "健康情緒與青少年同行"}}],
+            profile={"pain_points": ["情緒壓力"]},
+        )
+        second = handler._memory.save_proactive_draft(
+            "85361111111",
+            "親子溝通工作坊草稿",
+            matches=[{"course": {"id": "c-talk", "name": "親子溝通工作坊"}}],
+            profile={"pain_points": ["親子溝通"]},
+        )
+        handler._memory.mark_proactive_draft(second["id"], "skipped")
+
+        old_admin = os.environ.get("ADMIN_SECRET")
+        old_handler = api_server.wa_handler
+        old_memory = api_server.wa_memory
+        os.environ["ADMIN_SECRET"] = "admin-secret"
+        api_server.wa_handler = handler
+        api_server.wa_memory = handler._memory
+        try:
+            request = self.admin_request()
+            allowed = asyncio.run(api_server.api_whatsapp_proactive_drafts(
+                request=request,
+                status="draft",
+                search="健康",
+                consent_status="allowed",
+            ))
+            history = asyncio.run(api_server.api_whatsapp_proactive_drafts(
+                request=request,
+                status="all",
+                search="親子溝通",
+            ))
+
+            self.assertEqual([d["id"] for d in allowed["drafts"]], [first["id"]])
+            self.assertEqual([d["id"] for d in history["drafts"]], [second["id"]])
+            self.assertEqual(history["drafts"][0]["status"], "skipped")
+        finally:
+            api_server.wa_handler = old_handler
+            api_server.wa_memory = old_memory
+            if old_admin is None:
+                os.environ.pop("ADMIN_SECRET", None)
+            else:
+                os.environ["ADMIN_SECRET"] = old_admin
+
+    def test_privacy_prune_previews_and_deletes_old_operational_history(self):
+        store = WhatsAppMemoryStore()
+        old_time = (datetime.now() - timedelta(days=120)).isoformat()
+        store.record_message("85360000000", "inbound", "parent", "舊訊息")
+        store.save_llm_cached_response("cache-key", "舊 LLM 回覆")
+        store.claim_message("wamid.old", "85360000000")
+        flag_id = store.add_agent_flag("85360000000", "handoff_needed", "舊 flag")
+        store.resolve_agent_flag(flag_id)
+        draft = store.save_proactive_draft(
+            "85360000000",
+            "舊推送紀錄",
+            matches=[{"course": {"id": "c-health"}}],
+            profile={"pain_points": ["情緒壓力"]},
+        )
+        store.mark_proactive_draft(draft["id"], "skipped")
+        with sqlite3.connect(str(store.db_path)) as conn:
+            for table in (
+                "whatsapp_messages",
+                "llm_response_cache",
+                "processed_whatsapp_messages",
+                "whatsapp_agent_flags",
+                "whatsapp_proactive_drafts",
+            ):
+                column = "updated_at" if table == "whatsapp_proactive_drafts" else "created_at"
+                conn.execute(f"UPDATE {table} SET {column} = ?", (old_time,))
+            conn.commit()
+
+        old_admin = os.environ.get("ADMIN_SECRET")
+        old_handler = api_server.wa_handler
+        old_memory = api_server.wa_memory
+        os.environ["ADMIN_SECRET"] = "admin-secret"
+        api_server.wa_handler = None
+        api_server.wa_memory = store
+        try:
+            preview = asyncio.run(api_server.api_whatsapp_privacy_prune(
+                api_server.PrivacyPruneRequest(older_than_days=90, dry_run=True),
+                request=self.admin_request(),
+            ))
+            self.assertTrue(preview["dry_run"])
+            self.assertEqual(preview["counts"]["messages"], 1)
+            self.assertEqual(preview["counts"]["llm_cache"], 1)
+            self.assertEqual(preview["counts"]["processed_message_ids"], 1)
+            self.assertEqual(preview["counts"]["resolved_flags"], 1)
+            self.assertEqual(preview["counts"]["closed_proactive_drafts"], 1)
+            self.assertEqual(len(store.get_messages("85360000000")), 1)
+
+            result = asyncio.run(api_server.api_whatsapp_privacy_prune(
+                api_server.PrivacyPruneRequest(older_than_days=90, dry_run=False),
+                request=self.admin_request(),
+            ))
+            self.assertFalse(result["dry_run"])
+            self.assertEqual(store.get_messages("85360000000"), [])
+            self.assertEqual(store.get_llm_cached_response("cache-key"), "")
+            self.assertEqual(store.list_agent_flags(unresolved_only=False), [])
+            self.assertEqual(store.list_proactive_drafts(status="all"), [])
+            self.assertTrue(store.get_conversation("85360000000"))
+        finally:
+            api_server.wa_handler = old_handler
+            api_server.wa_memory = old_memory
+            if old_admin is None:
+                os.environ.pop("ADMIN_SECRET", None)
+            else:
+                os.environ["ADMIN_SECRET"] = old_admin
+
     def test_send_proactive_draft_requires_consent_and_records_history(self):
         handler, sent = self.make_handler()
         draft = handler._memory.save_proactive_draft(
