@@ -11,6 +11,7 @@ import hmac
 import inspect
 import json
 import re
+from datetime import datetime
 from typing import Optional, List, Dict, Any
 import requests
 
@@ -185,6 +186,14 @@ def get_deepseek_daily_limit_global() -> int:
     except ValueError:
         logger.warning("DEEPSEEK_DAILY_LIMIT_GLOBAL 無效，使用預設值 200")
         return 200
+
+
+def get_proactive_template_name() -> str:
+    return os.environ.get("WHATSAPP_PROACTIVE_TEMPLATE_NAME", "").strip()
+
+
+def get_proactive_template_language() -> str:
+    return os.environ.get("WHATSAPP_PROACTIVE_TEMPLATE_LANGUAGE", "zh_HK").strip() or "zh_HK"
 
 
 def is_valid_meta_signature(payload: bytes, signature_header: str, app_secret: str) -> bool:
@@ -366,6 +375,26 @@ class WhatsAppHandler:
             logger.exception(f"發送消息異常: {e}")
             return False
 
+    def _post_message_payload(self, payload: Dict[str, Any]) -> bool:
+        if not self.access_token or not self.phone_number_id:
+            logger.error("WhatsApp API 未配置")
+            return False
+
+        headers = {
+            "Authorization": f"Bearer {self.access_token}",
+            "Content-Type": "application/json",
+        }
+        try:
+            resp = requests.post(self.api_url, json=payload, headers=headers, timeout=30)
+            if resp.status_code == 200:
+                logger.info("WhatsApp 消息發送成功 -> %s", payload.get("to", ""))
+                return True
+            logger.warning("WhatsApp 消息發送失敗: %s %s", resp.status_code, resp.text)
+            return False
+        except Exception as e:
+            logger.exception("WhatsApp 消息發送異常: %s", e)
+            return False
+
     def _reply(self, to: str, text: str, source: str = "ai") -> bool:
         sent = self._send_text(to, text)
         if sent:
@@ -378,6 +407,67 @@ class WhatsAppHandler:
         if not message:
             return False
         return self._reply(to, message, source="admin")
+
+    def send_template_message(
+        self,
+        to: str,
+        template_name: str,
+        language_code: str,
+        body_parameters: Optional[List[str]] = None,
+        transcript_body: str = "",
+    ) -> bool:
+        """Send an approved WhatsApp template and record the operator transcript."""
+        template = {
+            "name": template_name.strip(),
+            "language": {"code": (language_code or "zh_HK").strip() or "zh_HK"},
+        }
+        parameters = [
+            {"type": "text", "text": str(value)}
+            for value in (body_parameters or [])
+            if str(value)
+        ]
+        if parameters:
+            template["components"] = [
+                {
+                    "type": "body",
+                    "parameters": parameters,
+                }
+            ]
+
+        payload = {
+            "messaging_product": "whatsapp",
+            "recipient_type": "individual",
+            "to": to,
+            "type": "template",
+            "template": template,
+        }
+        sent = self._post_message_payload(payload)
+        if sent:
+            self._memory.record_message(
+                to,
+                "outbound",
+                "admin",
+                transcript_body or f"[Template] {template_name}",
+                {
+                    "message_type": "template",
+                    "template_name": template_name,
+                    "template_language": language_code,
+                    "body_parameters": body_parameters or [],
+                },
+            )
+        return sent
+
+    def is_within_customer_service_window(self, phone: str, hours: int = 24) -> bool:
+        messages = self._memory.get_messages(phone, limit=300)
+        for message in reversed(messages):
+            if message.get("direction") != "inbound":
+                continue
+            try:
+                created_at = datetime.fromisoformat(str(message.get("created_at", "")))
+            except ValueError:
+                continue
+            return (datetime.now() - created_at).total_seconds() <= hours * 3600
+        return False
 
     @staticmethod
     def _course_value(course: Any, attr: str, fallback: str = "") -> str:

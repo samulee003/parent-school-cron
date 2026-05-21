@@ -4,9 +4,11 @@ import asyncio
 import json
 import logging
 import os
+import sqlite3
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timedelta
 from unittest.mock import patch
 
 ROOT = os.path.dirname(os.path.dirname(__file__))
@@ -1176,6 +1178,111 @@ class WhatsAppHandlerTests(unittest.TestCase):
                 os.environ.pop("ADMIN_SECRET", None)
             else:
                 os.environ["ADMIN_SECRET"] = old_admin
+
+    def test_template_message_payload_uses_cloud_api_template(self):
+        old_phone_id = os.environ.get("WHATSAPP_PHONE_NUMBER_ID")
+        old_access_token = os.environ.get("WHATSAPP_ACCESS_TOKEN")
+        os.environ["WHATSAPP_PHONE_NUMBER_ID"] = "phone-id"
+        os.environ["WHATSAPP_ACCESS_TOKEN"] = "access-token"
+        try:
+            handler = WhatsAppHandler()
+            with patch("whatsapp_handler.requests.post") as post:
+                post.return_value.status_code = 200
+
+                sent = handler.send_template_message(
+                    to="85360000000",
+                    template_name="parent_course_reminder",
+                    language_code="zh_HK",
+                    body_parameters=["健康情緒與青少年同行", "https://example.test/register"],
+                    transcript_body="template transcript",
+                )
+
+            self.assertTrue(sent)
+            payload = post.call_args.kwargs["json"]
+            self.assertEqual(payload["type"], "template")
+            self.assertEqual(payload["template"]["name"], "parent_course_reminder")
+            self.assertEqual(payload["template"]["language"]["code"], "zh_HK")
+            params = payload["template"]["components"][0]["parameters"]
+            self.assertEqual([p["text"] for p in params], [
+                "健康情緒與青少年同行",
+                "https://example.test/register",
+            ])
+            messages = handler._memory.get_messages("85360000000")
+            self.assertEqual(messages[-1]["body"], "template transcript")
+            self.assertEqual(messages[-1]["meta"]["message_type"], "template")
+        finally:
+            if old_phone_id is None:
+                os.environ.pop("WHATSAPP_PHONE_NUMBER_ID", None)
+            else:
+                os.environ["WHATSAPP_PHONE_NUMBER_ID"] = old_phone_id
+            if old_access_token is None:
+                os.environ.pop("WHATSAPP_ACCESS_TOKEN", None)
+            else:
+                os.environ["WHATSAPP_ACCESS_TOKEN"] = old_access_token
+
+    def test_proactive_send_requires_configured_template_when_window_expired(self):
+        handler, sent = self.make_handler()
+        handler._memory.update_conversation("85360000000", consent_status="allowed")
+        handler._memory.record_message("85360000000", "inbound", "parent", "孩子13歲")
+        old_time = (datetime.now() - timedelta(hours=25)).isoformat()
+        with sqlite3.connect(str(handler._memory.db_path)) as conn:
+            conn.execute(
+                "UPDATE whatsapp_messages SET created_at = ? WHERE phone = ? AND direction = 'inbound'",
+                (old_time, "85360000000"),
+            )
+            conn.commit()
+
+        old_admin = os.environ.get("ADMIN_SECRET")
+        old_template = os.environ.get("WHATSAPP_PROACTIVE_TEMPLATE_NAME")
+        old_language = os.environ.get("WHATSAPP_PROACTIVE_TEMPLATE_LANGUAGE")
+        old_handler = api_server.wa_handler
+        old_memory = api_server.wa_memory
+        os.environ["ADMIN_SECRET"] = "admin-secret"
+        os.environ.pop("WHATSAPP_PROACTIVE_TEMPLATE_NAME", None)
+        api_server.wa_handler = handler
+        api_server.wa_memory = handler._memory
+        try:
+            with self.assertRaises(HTTPException) as ctx:
+                asyncio.run(api_server.api_whatsapp_send_proactive_match(
+                    "85360000000",
+                    api_server.ProactiveSendRequest(body="主動推送草稿"),
+                    secret="admin-secret",
+                ))
+            self.assertEqual(ctx.exception.status_code, 409)
+            self.assertEqual(sent, [])
+
+            os.environ["WHATSAPP_PROACTIVE_TEMPLATE_NAME"] = "parent_course_reminder"
+            os.environ["WHATSAPP_PROACTIVE_TEMPLATE_LANGUAGE"] = "zh_HK"
+            handler.send_template_message = (
+                lambda to, template_name, language_code, body_parameters, transcript_body:
+                sent.append((to, template_name, language_code, body_parameters, transcript_body)) or True
+            )
+
+            result = asyncio.run(api_server.api_whatsapp_send_proactive_match(
+                "85360000000",
+                api_server.ProactiveSendRequest(body="主動推送草稿"),
+                secret="admin-secret",
+            ))
+
+            self.assertTrue(result["success"])
+            self.assertEqual(sent[-1][1], "parent_course_reminder")
+            self.assertEqual(sent[-1][2], "zh_HK")
+            self.assertEqual(sent[-1][3], ["主動推送草稿"])
+        finally:
+            api_server.wa_handler = old_handler
+            api_server.wa_memory = old_memory
+            if old_admin is None:
+                os.environ.pop("ADMIN_SECRET", None)
+            else:
+                os.environ["ADMIN_SECRET"] = old_admin
+            if old_template is None:
+                os.environ.pop("WHATSAPP_PROACTIVE_TEMPLATE_NAME", None)
+            else:
+                os.environ["WHATSAPP_PROACTIVE_TEMPLATE_NAME"] = old_template
+            if old_language is None:
+                os.environ.pop("WHATSAPP_PROACTIVE_TEMPLATE_LANGUAGE", None)
+            else:
+                os.environ["WHATSAPP_PROACTIVE_TEMPLATE_LANGUAGE"] = old_language
 
     def test_root_reports_whatsapp_first_version(self):
         result = asyncio.run(api_server.root())

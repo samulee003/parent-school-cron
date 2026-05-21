@@ -88,6 +88,8 @@ DEEPSEEK_BASE_URL
 DEEPSEEK_MODEL
 DEEPSEEK_DAILY_LIMIT_PER_USER
 DEEPSEEK_DAILY_LIMIT_GLOBAL
+WHATSAPP_PROACTIVE_TEMPLATE_NAME
+WHATSAPP_PROACTIVE_TEMPLATE_LANGUAGE
 CRON_SECRET
 ADMIN_SECRET
 WXAGENT_DATA_DIR
@@ -146,6 +148,11 @@ If WhatsApp says the number has no account after adding it, likely causes:
 - Meta review/payment/template restrictions affect outbound business-initiated messages.
 
 User-initiated replies inside the 24-hour window should work once Cloud API registration and `messages` subscription are correct.
+
+Business-initiated proactive messages outside the 24-hour customer service window
+must use an approved WhatsApp template. Configure the template with
+`WHATSAPP_PROACTIVE_TEMPLATE_NAME` and optionally
+`WHATSAPP_PROACTIVE_TEMPLATE_LANGUAGE` (default `zh_HK`).
 
 ## Conversation Design Rules
 
@@ -215,12 +222,14 @@ Already started:
 - Operator-approved proactive draft sending for parents with `allowed` consent.
 - WhatsApp-side consent capture: parents can reply `同意推送` / `同意收課程提醒`
   or `暫停推送`.
+- WhatsApp template send path for proactive drafts outside the 24-hour window.
 
 Next:
 
-- WhatsApp template handling for messages outside the 24-hour user window.
 - Stronger proactive workflow: new course -> match parent memories -> review queue -> operator approve/send.
 - Persistent proactive draft queue/history beyond transcript records.
+- Create and approve the production Meta template in WhatsApp Manager, then set the
+  template name in Zeabur.
 
 When building this, prefer the existing FastAPI app and SQLite memory store first. Avoid adding a heavy frontend framework unless the dashboard grows beyond simple HTML/JS.
 

@@ -27,6 +27,7 @@
 - `/admin` 已有主動推送同意狀態：`unknown` / `allowed` / `paused`。
 - 已有 operator approval loop：主動匹配產生草稿，只有 `allowed` 家長可以由管理台批准發送。
 - WhatsApp 端已能直接更新主動推送同意：家長回覆 `同意推送` / `同意收課程提醒` 會變 `allowed`，回覆 `暫停推送` 會變 `paused`。
+- 已有 WhatsApp template 發送通道：主動草稿若超出 24 小時 customer service window，會自動改用 `WHATSAPP_PROACTIVE_TEMPLATE_NAME`；未配置模板時會阻止發送。
 
 家長入口：
 
@@ -58,7 +59,7 @@ python -B -m compileall src
 git diff --check
 ```
 
-最近一次已知測試數量：`58` 個 unittest 通過。
+最近一次已知測試數量：`60` 個 unittest 通過。
 
 2026-05-21 實站爬蟲驗證：
 
@@ -132,11 +133,12 @@ git diff --check
 - Proactive consent status and notes.
 - Operator-approved proactive draft send endpoint.
 - WhatsApp-side consent capture commands.
+- WhatsApp template payload sending for proactive messages outside the 24-hour window.
 - Legacy admin API: `/api/users`, `/api/push`, `/api/cron`.
 
 ### Does not exist yet
 
-- WhatsApp template management for messages outside the 24-hour user window.
+- Production Meta template approval and Zeabur variable setup.
 - Persistent proactive draft queue/history beyond transcript records.
 
 ## Recommended Next Build
@@ -156,11 +158,11 @@ Already done in MVP:
 
 Next useful build:
 
-1. Add WhatsApp template handling for outbound messages outside the 24-hour window.
-2. Add persistent proactive draft queue/history beyond transcript records.
-3. Add a softer interview phrase that asks consent during onboarding.
-4. Improve `/admin` auth beyond query-string secret before wider use.
-5. Add monitoring for DSEDJ HTML changes, especially detail-page parsing.
+1. Create and approve the production WhatsApp template in Meta WhatsApp Manager.
+2. Set `WHATSAPP_PROACTIVE_TEMPLATE_NAME` and `WHATSAPP_PROACTIVE_TEMPLATE_LANGUAGE` in Zeabur.
+3. Add persistent proactive draft queue/history beyond transcript records.
+4. Add a softer interview phrase that asks consent during onboarding.
+5. Improve `/admin` auth beyond query-string secret before wider use.
 
 Recommended table direction:
 

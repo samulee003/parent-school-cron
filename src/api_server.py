@@ -141,6 +141,10 @@ class ConversationUpdateRequest(BaseModel):
 
 class ProactiveSendRequest(BaseModel):
     body: str = ""
+    use_template: bool = False
+    template_name: str = ""
+    template_language: str = ""
+    template_params: list[str] = []
 
 
 # ============== FastAPI 應用 ==============
@@ -724,9 +728,39 @@ async def api_whatsapp_send_proactive_match(
     message = payload.body.strip()
     if not message:
         raise HTTPException(status_code=400, detail="Message body is required")
+    needs_template = (
+        payload.use_template
+        or not handler.is_within_customer_service_window(phone)
+    )
+    if needs_template:
+        template_name = (
+            payload.template_name.strip()
+            or os.environ.get("WHATSAPP_PROACTIVE_TEMPLATE_NAME", "").strip()
+        )
+        template_language = (
+            payload.template_language.strip()
+            or os.environ.get("WHATSAPP_PROACTIVE_TEMPLATE_LANGUAGE", "zh_HK").strip()
+            or "zh_HK"
+        )
+        if not template_name:
+            raise HTTPException(
+                status_code=409,
+                detail="WhatsApp template is required outside the 24-hour customer service window",
+            )
+        parameters = payload.template_params or [message]
+        if not handler.send_template_message(
+            phone,
+            template_name,
+            template_language,
+            parameters,
+            transcript_body=message,
+        ):
+            raise HTTPException(status_code=502, detail="WhatsApp template message failed")
+        return {"success": True, "message_type": "template"}
+
     if not handler.send_admin_message(phone, message):
         raise HTTPException(status_code=502, detail="WhatsApp message failed")
-    return {"success": True}
+    return {"success": True, "message_type": "text"}
 
 
 # ============== 企業微信客服回調 ==============
