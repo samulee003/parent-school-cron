@@ -134,7 +134,9 @@ When deploying:
 - Restart the service after changing WhatsApp or DeepSeek variables.
 - Check `/health`.
 - WhatsApp POST webhook is fail-closed: `WHATSAPP_APP_SECRET` must be configured
-  or incoming webhook events are rejected.
+  or incoming webhook events are rejected, unless the temporary
+  `WHATSAPP_ALLOW_UNSIGNED_WEBHOOK=true` compatibility switch is explicitly set.
+  Remove that switch after Meta App Secret is configured.
 - Check Meta webhook verification only with the configured verify token, without exposing it.
 - If webhook receives but user sees no reply, check Cloud API registration, app subscription to `messages`, and access-token permissions.
 

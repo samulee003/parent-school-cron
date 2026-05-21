@@ -25,6 +25,11 @@
       "required": true
     },
     {
+      "key": "WHATSAPP_ALLOW_UNSIGNED_WEBHOOK",
+      "description": "Temporary compatibility switch for unsigned WhatsApp webhooks; keep false after Meta App Secret is configured",
+      "required": false
+    },
+    {
       "key": "WHATSAPP_PROACTIVE_TEMPLATE_NAME",
       "description": "Approved WhatsApp template name for proactive messages outside the 24-hour window",
       "required": false

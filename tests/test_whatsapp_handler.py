@@ -963,7 +963,9 @@ class WhatsAppHandlerTests(unittest.TestCase):
         body = b'{"object":"whatsapp_business_account","entry":[]}'
         request = FakeRequest(body, {})
         old_secret = os.environ.get("WHATSAPP_APP_SECRET")
+        old_allow_unsigned = os.environ.get("WHATSAPP_ALLOW_UNSIGNED_WEBHOOK")
         os.environ.pop("WHATSAPP_APP_SECRET", None)
+        os.environ.pop("WHATSAPP_ALLOW_UNSIGNED_WEBHOOK", None)
         try:
             with self.assertRaises(HTTPException) as ctx:
                 asyncio.run(api_server.whatsapp_webhook(request, api_server.BackgroundTasks()))
@@ -973,6 +975,33 @@ class WhatsAppHandlerTests(unittest.TestCase):
                 os.environ.pop("WHATSAPP_APP_SECRET", None)
             else:
                 os.environ["WHATSAPP_APP_SECRET"] = old_secret
+            if old_allow_unsigned is None:
+                os.environ.pop("WHATSAPP_ALLOW_UNSIGNED_WEBHOOK", None)
+            else:
+                os.environ["WHATSAPP_ALLOW_UNSIGNED_WEBHOOK"] = old_allow_unsigned
+
+    def test_whatsapp_webhook_can_temporarily_allow_unsigned_when_explicitly_enabled(self):
+        body = b'{"object":"whatsapp_business_account","entry":[]}'
+        request = FakeRequest(body, {})
+        old_secret = os.environ.get("WHATSAPP_APP_SECRET")
+        old_allow_unsigned = os.environ.get("WHATSAPP_ALLOW_UNSIGNED_WEBHOOK")
+        os.environ.pop("WHATSAPP_APP_SECRET", None)
+        os.environ["WHATSAPP_ALLOW_UNSIGNED_WEBHOOK"] = "true"
+        old_get_wa_handler = api_server.get_wa_handler
+        api_server.get_wa_handler = lambda: None
+        try:
+            response = asyncio.run(api_server.whatsapp_webhook(request, api_server.BackgroundTasks()))
+            self.assertEqual(response.body, b"ok")
+        finally:
+            api_server.get_wa_handler = old_get_wa_handler
+            if old_secret is None:
+                os.environ.pop("WHATSAPP_APP_SECRET", None)
+            else:
+                os.environ["WHATSAPP_APP_SECRET"] = old_secret
+            if old_allow_unsigned is None:
+                os.environ.pop("WHATSAPP_ALLOW_UNSIGNED_WEBHOOK", None)
+            else:
+                os.environ["WHATSAPP_ALLOW_UNSIGNED_WEBHOOK"] = old_allow_unsigned
 
     def test_whatsapp_webhook_schedules_processing_in_background(self):
         payload = {

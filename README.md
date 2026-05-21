@@ -56,6 +56,7 @@ Meta 後台設定：
 | `WHATSAPP_ACCESS_TOKEN` | Permanent token |
 | `WHATSAPP_VERIFY_TOKEN` | Meta webhook 驗證 token |
 | `WHATSAPP_APP_SECRET` | 必填，用於驗證 Meta 簽名；缺少時 webhook 會拒絕處理 |
+| `WHATSAPP_ALLOW_UNSIGNED_WEBHOOK` | 臨時兼容開關；只有未取得 Meta App Secret 時才短暫設 `true` |
 | `WHATSAPP_PROACTIVE_TEMPLATE_NAME` | 可選，窗口外主動推送使用的已核准 WhatsApp template 名稱 |
 | `WHATSAPP_PROACTIVE_TEMPLATE_LANGUAGE` | 可選，template 語言，預設 `zh_HK` |
 | `CRON_SECRET` | 保護 `/api/cron` |

@@ -26,6 +26,11 @@
       "required": true,
       "type": "password"
     },
+    "WHATSAPP_ALLOW_UNSIGNED_WEBHOOK": {
+      "description": "Temporary compatibility switch for unsigned WhatsApp webhooks; keep false after Meta App Secret is configured",
+      "required": false,
+      "type": "string"
+    },
     "CRON_SECRET": {
       "description": "Cron endpoint secret",
       "required": true,

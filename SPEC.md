@@ -35,6 +35,7 @@
 | `WHATSAPP_ACCESS_TOKEN` | WhatsApp Cloud API token，正式環境用 Permanent token |
 | `WHATSAPP_VERIFY_TOKEN` | Meta webhook GET 驗證 |
 | `WHATSAPP_APP_SECRET` | Meta POST webhook 簽名驗證，必填 |
+| `WHATSAPP_ALLOW_UNSIGNED_WEBHOOK` | 臨時兼容未簽名 webhook；正式環境應為 `false` |
 | `CRON_SECRET` | `/api/cron` |
 | `ADMIN_SECRET` | `/admin` 管理台登入 |
 

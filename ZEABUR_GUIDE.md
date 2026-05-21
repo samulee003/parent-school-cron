@@ -29,6 +29,7 @@ WhatsApp 家長訊息
 | `WHATSAPP_ACCESS_TOKEN` | Permanent Access Token |
 | `WHATSAPP_VERIFY_TOKEN` | Meta Webhook Verify Token |
 | `WHATSAPP_APP_SECRET` | Meta App Secret，必填；缺少時 WhatsApp webhook 會拒絕處理 |
+| `WHATSAPP_ALLOW_UNSIGNED_WEBHOOK` | 臨時兼容開關；正式環境補上 App Secret 後保持 `false` |
 | `WHATSAPP_PROACTIVE_TEMPLATE_NAME` | 可選，窗口外主動推送使用的已核准 WhatsApp template 名稱 |
 | `WHATSAPP_PROACTIVE_TEMPLATE_LANGUAGE` | 可選，template 語言，預設 `zh_HK` |
 | `CRON_SECRET` | Cron endpoint secret |

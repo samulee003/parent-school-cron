@@ -152,6 +152,11 @@ def _admin_cookie_secure() -> bool:
     return raw not in {"0", "false", "no", "off"}
 
 
+def _env_truthy(name: str) -> bool:
+    raw = os.environ.get(name, "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
 # ============== Pydantic 模型 ==============
 
 class WeComCallback(BaseModel):
@@ -1017,16 +1022,19 @@ async def whatsapp_webhook(request: Request, background_tasks: BackgroundTasks):
     try:
         body = await request.body()
         app_secret = os.environ.get("WHATSAPP_APP_SECRET", "")
-        if not app_secret:
+        if app_secret:
+            if not is_valid_meta_signature(
+                body,
+                request.headers.get("x-hub-signature-256", ""),
+                app_secret,
+            ):
+                logger.warning("WhatsApp webhook 簽名驗證失敗")
+                raise HTTPException(status_code=403, detail="Invalid signature")
+        elif _env_truthy("WHATSAPP_ALLOW_UNSIGNED_WEBHOOK"):
+            logger.warning("WHATSAPP_APP_SECRET 未配置，暫時允許未簽名 WhatsApp webhook")
+        else:
             logger.error("WHATSAPP_APP_SECRET 未配置，拒絕 WhatsApp webhook")
             raise HTTPException(status_code=500, detail="WhatsApp app secret not configured")
-        if not is_valid_meta_signature(
-            body,
-            request.headers.get("x-hub-signature-256", ""),
-            app_secret,
-        ):
-            logger.warning("WhatsApp webhook 簽名驗證失敗")
-            raise HTTPException(status_code=403, detail="Invalid signature")
 
         handler = get_wa_handler()
         if not handler:
