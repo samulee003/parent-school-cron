@@ -24,6 +24,8 @@
 - WhatsApp onboarding 已改成兩步訪談：先問孩子年齡和關心痛點，資料足夠才推薦少量課程；推薦後才柔性提示 `同意推送`。
 - 根目錄 `/` 是給 Meta / 家長看的公開 landing page，`HEAD /` 也會回 200。
 - 已開始 Agentic Admin MVP：記錄 inbound/outbound transcript、conversation status、人工接手/恢復 AI、人工回覆 API、受 `ADMIN_SECRET` 保護的 `/admin` 初版介面。
+- `/admin` 已升級為 Agent Inbox 第一版：可篩選全部/人工接手/AI 自動/有待處理/可推送/有草稿，並在對話詳情顯示 agent state、flags、草稿和結構化 Profile 編輯。
+- 管理員可直接更新家長 `age_groups`、`pain_points`、`target`、`topic`、`pain_summary`，更新後會寫入 `profile_json`，AI 後續推薦會使用這份 profile。
 - `/admin` 已有家長標籤、備註、不確定/無匹配隊列、主動匹配草稿。
 - `/admin` 已有主動推送同意狀態：`unknown` / `allowed` / `paused`。
 - 已有 operator approval loop：主動匹配產生草稿，只有 `allowed` 家長可以由管理台批准發送。
@@ -66,7 +68,7 @@ python -B -m compileall src
 git diff --check
 ```
 
-最近一次已知測試數量：`74` 個 unittest 通過。
+最近一次已知測試數量：`80` 個 unittest 通過。
 
 2026-05-21 實站爬蟲驗證：
 

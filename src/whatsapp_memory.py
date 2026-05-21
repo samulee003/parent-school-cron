@@ -316,6 +316,50 @@ class WhatsAppMemoryStore:
                 ).fetchall()
         return [self._conversation_row_to_dict(row) for row in rows]
 
+    def count_agent_flags(self, phone: str = "", unresolved_only: bool = True) -> int:
+        clauses: List[str] = []
+        values: List[Any] = []
+        if unresolved_only:
+            clauses.append("resolved_at = ''")
+        if phone:
+            clauses.append("phone = ?")
+            values.append(phone)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        with self._lock:
+            with closing(sqlite3.connect(str(self.db_path))) as conn:
+                row = conn.execute(
+                    f"""
+                    SELECT COUNT(*)
+                    FROM whatsapp_agent_flags
+                    {where}
+                    """,
+                    values,
+                ).fetchone()
+        return int(row[0]) if row else 0
+
+    def count_proactive_drafts(self, phone: str = "", status: str = "draft") -> int:
+        clauses: List[str] = []
+        values: List[Any] = []
+        clean_status = str(status or "draft").strip().lower()
+        if clean_status and clean_status != "all":
+            clauses.append("status = ?")
+            values.append(self._clean_draft_status(clean_status))
+        if phone:
+            clauses.append("phone = ?")
+            values.append(phone)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        with self._lock:
+            with closing(sqlite3.connect(str(self.db_path))) as conn:
+                row = conn.execute(
+                    f"""
+                    SELECT COUNT(*)
+                    FROM whatsapp_proactive_drafts
+                    {where}
+                    """,
+                    values,
+                ).fetchone()
+        return int(row[0]) if row else 0
+
     def get_conversation(self, phone: str) -> Dict[str, Any]:
         if not phone:
             return {}
@@ -483,9 +527,18 @@ class WhatsAppMemoryStore:
         self,
         unresolved_only: bool = True,
         limit: int = 100,
+        phone: str = "",
     ) -> List[Dict[str, Any]]:
         limit = max(1, min(int(limit or 100), 300))
-        where = "WHERE resolved_at = ''" if unresolved_only else ""
+        clauses: List[str] = []
+        values: List[Any] = []
+        if unresolved_only:
+            clauses.append("resolved_at = ''")
+        if phone:
+            clauses.append("phone = ?")
+            values.append(phone)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        values.append(limit)
         with self._lock:
             with closing(sqlite3.connect(str(self.db_path))) as conn:
                 conn.row_factory = sqlite3.Row
@@ -497,7 +550,7 @@ class WhatsAppMemoryStore:
                     ORDER BY created_at DESC, id DESC
                     LIMIT ?
                     """,
-                    (limit,),
+                    values,
                 ).fetchall()
         return [self._flag_row_to_dict(row) for row in rows]
 

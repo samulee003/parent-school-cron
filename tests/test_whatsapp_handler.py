@@ -1266,6 +1266,284 @@ class WhatsAppHandlerTests(unittest.TestCase):
             else:
                 os.environ["ADMIN_SECRET"] = old_admin
 
+    def test_whatsapp_admin_profile_update_and_agent_state(self):
+        handler, _ = self.make_handler()
+        handler._handle_text_message("85360000000", "13歲")
+
+        old_admin = os.environ.get("ADMIN_SECRET")
+        old_handler = api_server.wa_handler
+        old_memory = api_server.wa_memory
+        os.environ["ADMIN_SECRET"] = "admin-secret"
+        api_server.wa_handler = handler
+        api_server.wa_memory = handler._memory
+        try:
+            request = self.admin_request()
+            before = asyncio.run(api_server.api_whatsapp_conversation(
+                "85360000000",
+                request=request,
+            ))
+            self.assertFalse(before["agent_state"]["profile_ready"])
+            self.assertIn("concern", before["agent_state"]["missing_fields"])
+            self.assertIn("13-18歲", before["profile_options"]["age_groups"])
+            self.assertIn("情緒壓力", before["profile_options"]["pain_points"])
+
+            updated = asyncio.run(api_server.api_whatsapp_update_profile(
+                "85360000000",
+                api_server.ProfileUpdateRequest(
+                    age_groups=["13-18歲"],
+                    pain_points=["情緒壓力"],
+                    target="家長",
+                    topic="身心健康",
+                    pain_summary="青春期壓力和焦慮",
+                ),
+                request=request,
+            ))
+
+            self.assertTrue(updated["agent_state"]["profile_ready"])
+            self.assertEqual(updated["agent_state"]["missing_fields"], [])
+            self.assertEqual(updated["profile"]["age_groups"], ["13-18歲"])
+            self.assertEqual(updated["profile"]["topic_source"], "admin")
+            self.assertIn("情緒壓力", updated["profile"]["pain_points"])
+            self.assertIn("青少年", updated["conversation"]["tags"])
+
+            detail = asyncio.run(api_server.api_whatsapp_conversation(
+                "85360000000",
+                request=request,
+            ))
+            self.assertTrue(detail["agent_state"]["profile_ready"])
+            self.assertEqual(detail["agent_state"]["recommended_action"], "可推薦課程")
+        finally:
+            api_server.wa_handler = old_handler
+            api_server.wa_memory = old_memory
+            if old_admin is None:
+                os.environ.pop("ADMIN_SECRET", None)
+            else:
+                os.environ["ADMIN_SECRET"] = old_admin
+
+    def test_whatsapp_admin_profile_update_rejects_invalid_values_and_requires_auth(self):
+        handler, _ = self.make_handler()
+
+        old_admin = os.environ.get("ADMIN_SECRET")
+        old_handler = api_server.wa_handler
+        old_memory = api_server.wa_memory
+        os.environ["ADMIN_SECRET"] = "admin-secret"
+        api_server.wa_handler = handler
+        api_server.wa_memory = handler._memory
+        try:
+            with self.assertRaises(HTTPException) as auth_ctx:
+                asyncio.run(api_server.api_whatsapp_update_profile(
+                    "85360000000",
+                    api_server.ProfileUpdateRequest(age_groups=["13-18歲"]),
+                    request=self.admin_request(secret="wrong"),
+                ))
+            self.assertEqual(auth_ctx.exception.status_code, 401)
+
+            with self.assertRaises(HTTPException) as invalid_ctx:
+                asyncio.run(api_server.api_whatsapp_update_profile(
+                    "85360000000",
+                    api_server.ProfileUpdateRequest(
+                        age_groups=["99歲"],
+                        pain_points=["情緒壓力"],
+                        target="家長",
+                        topic="身心健康",
+                    ),
+                    request=self.admin_request(),
+                ))
+            self.assertEqual(invalid_ctx.exception.status_code, 400)
+        finally:
+            api_server.wa_handler = old_handler
+            api_server.wa_memory = old_memory
+            if old_admin is None:
+                os.environ.pop("ADMIN_SECRET", None)
+            else:
+                os.environ["ADMIN_SECRET"] = old_admin
+
+    def test_whatsapp_admin_profile_clear_removes_fields(self):
+        handler, _ = self.make_handler()
+
+        old_admin = os.environ.get("ADMIN_SECRET")
+        old_handler = api_server.wa_handler
+        old_memory = api_server.wa_memory
+        os.environ["ADMIN_SECRET"] = "admin-secret"
+        api_server.wa_handler = handler
+        api_server.wa_memory = handler._memory
+        try:
+            request = self.admin_request()
+            asyncio.run(api_server.api_whatsapp_update_profile(
+                "85360000000",
+                api_server.ProfileUpdateRequest(
+                    age_groups=["13-18歲"],
+                    pain_points=["情緒壓力"],
+                    target="家長",
+                    topic="身心健康",
+                    pain_summary="青春期壓力",
+                ),
+                request=request,
+            ))
+            cleared = asyncio.run(api_server.api_whatsapp_update_profile(
+                "85360000000",
+                api_server.ProfileUpdateRequest(
+                    age_groups=[],
+                    pain_points=[],
+                    target="",
+                    topic="",
+                    pain_summary="",
+                ),
+                request=request,
+            ))
+
+            self.assertEqual(cleared["profile"], {})
+            self.assertFalse(cleared["agent_state"]["profile_ready"])
+            self.assertEqual(cleared["agent_state"]["missing_fields"], ["age_group", "concern"])
+        finally:
+            api_server.wa_handler = old_handler
+            api_server.wa_memory = old_memory
+            if old_admin is None:
+                os.environ.pop("ADMIN_SECRET", None)
+            else:
+                os.environ["ADMIN_SECRET"] = old_admin
+
+    def test_admin_profile_update_affects_next_recommendation(self):
+        courses = [
+            Course(
+                id="c-health",
+                name="健康情緒與青少年同行",
+                date="2026/05/31 星期日 10:30-12:00",
+                date_parsed=None,
+                age_group="13-18歲",
+                age_groups=["13-18歲"],
+                topic="身心健康",
+                target="家長",
+                status="報名中",
+                detail_url="https://example.test/course/health",
+                summary="覺察青少年壓力與焦慮，學習親子衝突後真誠對話。",
+            )
+        ]
+        handler = WhatsAppHandler()
+        handler._get_bot = lambda: type("Bot", (), {"scraper": FakeCrawler(courses)})()
+        sent = []
+        handler._send_text = lambda to, text: sent.append((to, text)) or True
+
+        old_admin = os.environ.get("ADMIN_SECRET")
+        old_handler = api_server.wa_handler
+        old_memory = api_server.wa_memory
+        os.environ["ADMIN_SECRET"] = "admin-secret"
+        api_server.wa_handler = handler
+        api_server.wa_memory = handler._memory
+        try:
+            asyncio.run(api_server.api_whatsapp_update_profile(
+                "85360000000",
+                api_server.ProfileUpdateRequest(
+                    age_groups=["13-18歲"],
+                    pain_points=["情緒壓力"],
+                    target="家長",
+                    topic="身心健康",
+                ),
+                request=self.admin_request(),
+            ))
+            with patch.dict(os.environ, {"DEEPSEEK_API_KEY": ""}, clear=False):
+                handler._handle_text_message("85360000000", "幫我揀")
+
+            self.assertIn("健康情緒與青少年同行", sent[-1][1])
+            self.assertIn("為什麼推薦", sent[-1][1])
+        finally:
+            api_server.wa_handler = old_handler
+            api_server.wa_memory = old_memory
+            if old_admin is None:
+                os.environ.pop("ADMIN_SECRET", None)
+            else:
+                os.environ["ADMIN_SECRET"] = old_admin
+
+    def test_whatsapp_admin_conversation_list_filters_and_detail_agent_context(self):
+        handler, _ = self.make_handler()
+        handler._handle_text_message("85360000000", "小朋友1歲，想親子活動")
+        handler._handle_text_message("85360000001", "課程")
+        handler._memory.set_conversation_status("85360000000", "human")
+        handler._memory.update_conversation("85360000000", consent_status="allowed")
+        handler._memory.add_agent_flag("85360000000", "handoff_needed", "需要人工跟進")
+        handler._memory.save_proactive_draft(
+            "85360000000",
+            "健康情緒與青少年同行草稿",
+            matches=[{"course": {"id": "c-health", "name": "健康情緒與青少年同行"}}],
+            profile={"pain_points": ["情緒壓力"]},
+        )
+
+        old_admin = os.environ.get("ADMIN_SECRET")
+        old_handler = api_server.wa_handler
+        old_memory = api_server.wa_memory
+        os.environ["ADMIN_SECRET"] = "admin-secret"
+        api_server.wa_handler = handler
+        api_server.wa_memory = handler._memory
+        try:
+            request = self.admin_request()
+            human = asyncio.run(api_server.api_whatsapp_conversations(
+                request=request,
+                status="human",
+            ))
+            self.assertEqual([c["phone"] for c in human["conversations"]], ["85360000000"])
+
+            flagged = asyncio.run(api_server.api_whatsapp_conversations(
+                request=request,
+                filter="flagged",
+            ))
+            self.assertEqual([c["phone"] for c in flagged["conversations"]], ["85360000000"])
+
+            consented = asyncio.run(api_server.api_whatsapp_conversations(
+                request=request,
+                consent_status="allowed",
+            ))
+            self.assertEqual([c["phone"] for c in consented["conversations"]], ["85360000000"])
+
+            searched = asyncio.run(api_server.api_whatsapp_conversations(
+                request=request,
+                search="85360000000",
+            ))
+            self.assertEqual([c["phone"] for c in searched["conversations"]], ["85360000000"])
+
+            detail = asyncio.run(api_server.api_whatsapp_conversation(
+                "85360000000",
+                request=request,
+            ))
+            self.assertEqual(detail["agent_state"]["open_flags_count"], 1)
+            self.assertEqual(detail["agent_state"]["draft_count"], 1)
+            self.assertEqual(detail["flags"][0]["flag_type"], "handoff_needed")
+            self.assertEqual(detail["drafts"][0]["draft_text"], "健康情緒與青少年同行草稿")
+        finally:
+            api_server.wa_handler = old_handler
+            api_server.wa_memory = old_memory
+            if old_admin is None:
+                os.environ.pop("ADMIN_SECRET", None)
+            else:
+                os.environ["ADMIN_SECRET"] = old_admin
+
+    def test_whatsapp_admin_dashboard_contains_agent_inbox_controls(self):
+        old_admin = os.environ.get("ADMIN_SECRET")
+        os.environ["ADMIN_SECRET"] = "admin-secret"
+        try:
+            response = asyncio.run(api_server.admin_dashboard(
+                request=self.admin_request(secret=""),
+            ))
+            login_html = response.body.decode()
+            self.assertIn("WhatsApp 家長學堂接手台", login_html)
+
+            valid_cookie = api_server.make_admin_session_token("admin-secret")
+            response = asyncio.run(api_server.admin_dashboard(
+                request=self.admin_request(secret="", cookie=valid_cookie),
+            ))
+            html = response.body.decode()
+            self.assertIn("filterStatus", html)
+            self.assertIn("結構化 Profile", html)
+            self.assertIn("profileAgeGroups", html)
+            self.assertIn("saveProfile", html)
+            self.assertIn("人工接手", html)
+            self.assertIn("不確定隊列", html)
+            self.assertIn("主動匹配草稿", html)
+        finally:
+            if old_admin is None:
+                os.environ.pop("ADMIN_SECRET", None)
+            else:
+                os.environ["ADMIN_SECRET"] = old_admin
+
     def test_whatsapp_admin_rejects_wrong_cookie_and_accepts_valid_cookie(self):
         handler, _ = self.make_handler()
         handler._handle_text_message("85360000000", "課程")

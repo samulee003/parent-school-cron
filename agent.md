@@ -231,9 +231,12 @@ Already started:
 - `/admin` dashboard protected by `ADMIN_SECRET` login and an HttpOnly session
   cookie; do not put admin secrets in URLs.
 - Parent list with phone, latest message, known memory, and status.
+- Inbox filters for all, human takeover, AI auto, flagged, pushable, and draft conversations.
 - Full inbound/outbound message transcript.
 - Human takeover / resume AI switch.
 - Manual reply from dashboard through WhatsApp Cloud API.
+- Structured Profile editor for `age_groups`, `pain_points`, `target`, `topic`, and `pain_summary`; admin-set topic uses `topic_source="admin"`.
+- Agent State summary per parent: profile readiness, missing fields, recommended next action, open flag count, and draft count.
 - Notes/tags per parent.
 - AI uncertainty and no-match flags.
 - Proactive matching draft endpoint based on stored memories and course summaries.

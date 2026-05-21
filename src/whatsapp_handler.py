@@ -930,6 +930,67 @@ class WhatsAppHandler:
         self._profiles[from_number] = dict(profile)
         self._memory.save_profile(from_number, profile)
 
+    @staticmethod
+    def admin_profile_options() -> Dict[str, List[str]]:
+        return {
+            "age_groups": list(AGE_GROUP_LABELS.keys()),
+            "pain_points": [str(rule["tag"]) for rule in PAIN_POINT_RULES],
+            "topics": list(TOPICS),
+            "targets": list(TARGETS),
+        }
+
+    def normalize_admin_profile(self, profile: Dict[str, Any]) -> Dict[str, Any]:
+        options = self.admin_profile_options()
+        age_groups = [
+            str(age).strip()
+            for age in profile.get("age_groups", [])
+            if str(age).strip()
+        ]
+        pain_points = [
+            str(pain).strip()
+            for pain in profile.get("pain_points", [])
+            if str(pain).strip()
+        ]
+        target = str(profile.get("target", "") or "").strip()
+        topic = str(profile.get("topic", "") or "").strip()
+        pain_summary = str(profile.get("pain_summary", "") or "").strip()
+
+        invalid_age_groups = [age for age in age_groups if age not in options["age_groups"]]
+        invalid_pain_points = [pain for pain in pain_points if pain not in options["pain_points"]]
+        if invalid_age_groups:
+            raise ValueError(f"Unsupported age group: {', '.join(invalid_age_groups)}")
+        if invalid_pain_points:
+            raise ValueError(f"Unsupported pain point: {', '.join(invalid_pain_points)}")
+        if target and target not in options["targets"]:
+            raise ValueError(f"Unsupported target: {target}")
+        if topic and topic not in options["topics"]:
+            raise ValueError(f"Unsupported topic: {topic}")
+
+        normalized: Dict[str, Any] = {}
+        if age_groups:
+            normalized["age_groups"] = age_groups[:4]
+            normalized["age_group"] = age_groups[0]
+        if pain_points:
+            normalized["pain_points"] = pain_points[:8]
+        if pain_summary:
+            normalized["pain_summary"] = pain_summary[:180]
+        if target:
+            normalized["target"] = target
+        if topic:
+            normalized["topic"] = topic
+            normalized["topic_source"] = "admin"
+        return normalized
+
+    def update_profile_from_admin(
+        self,
+        from_number: str,
+        raw_profile: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        profile = self.normalize_admin_profile(raw_profile)
+        self._save_profile(from_number, profile)
+        self._sync_onboarding_conversation_meta(from_number, profile)
+        return profile
+
     def _update_profile_from_text(self, from_number: str, text: str) -> Dict[str, Any]:
         profile = self._load_profile(from_number)
         age_groups = detect_age_groups(text)

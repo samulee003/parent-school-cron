@@ -198,6 +198,14 @@ class ConversationUpdateRequest(BaseModel):
     proactive_notes: str = ""
 
 
+class ProfileUpdateRequest(BaseModel):
+    age_groups: list[str] = []
+    pain_points: list[str] = []
+    target: str = ""
+    topic: str = ""
+    pain_summary: str = ""
+
+
 class ProactiveSendRequest(BaseModel):
     body: str = ""
     use_template: bool = False
@@ -214,6 +222,109 @@ class ProactiveDraftGenerateRequest(BaseModel):
 
 class ProactiveDraftUpdateRequest(BaseModel):
     body: str = ""
+
+
+def _profile_options() -> Dict[str, list[str]]:
+    return WhatsAppHandler.admin_profile_options()
+
+
+def _build_agent_state(
+    store: WhatsAppMemoryStore,
+    phone: str,
+    profile: Dict,
+    conversation: Optional[Dict] = None,
+) -> Dict:
+    age_groups = WhatsAppHandler._normalize_age_groups(profile.get("age_groups") or profile.get("age_group", ""))
+    has_concern = bool(
+        profile.get("pain_points")
+        or profile.get("target")
+        or profile.get("topic")
+    )
+    missing_fields = []
+    if not age_groups:
+        missing_fields.append("age_group")
+    if not has_concern:
+        missing_fields.append("concern")
+
+    open_flags_count = store.count_agent_flags(phone=phone, unresolved_only=True)
+    draft_count = store.count_proactive_drafts(phone=phone, status="draft")
+    consent_status = (conversation or store.get_conversation(phone)).get("consent_status", "unknown")
+
+    if open_flags_count:
+        recommended_action = "需要人工判斷"
+    elif "age_group" in missing_fields:
+        recommended_action = "追問年齡"
+    elif "concern" in missing_fields:
+        recommended_action = "追問痛點"
+    elif consent_status == "allowed":
+        recommended_action = "可產生主動草稿"
+    else:
+        recommended_action = "可推薦課程"
+
+    return {
+        "profile_ready": not missing_fields,
+        "missing_fields": missing_fields,
+        "recommended_action": recommended_action,
+        "open_flags_count": open_flags_count,
+        "draft_count": draft_count,
+    }
+
+
+def _enrich_conversation_for_inbox(
+    store: WhatsAppMemoryStore,
+    conversation: Dict,
+) -> Dict:
+    phone = conversation.get("phone", "")
+    enriched = dict(conversation)
+    profile = store.get_profile(phone)
+    agent_state = _build_agent_state(store, phone, profile, conversation)
+    enriched["open_flags_count"] = agent_state["open_flags_count"]
+    enriched["draft_count"] = agent_state["draft_count"]
+    enriched["profile_ready"] = agent_state["profile_ready"]
+    enriched["recommended_action"] = agent_state["recommended_action"]
+    return enriched
+
+
+def _filter_conversations(
+    store: WhatsAppMemoryStore,
+    conversations: list[Dict],
+    status: str = "",
+    consent_status: str = "",
+    filter: str = "",
+    search: str = "",
+) -> list[Dict]:
+    status = str(status or "").strip().lower()
+    consent_status = str(consent_status or "").strip().lower()
+    filter_name = str(filter or "").strip().lower()
+    search_text = str(search or "").strip().lower()
+
+    filtered = [_enrich_conversation_for_inbox(store, c) for c in conversations]
+    if status in {"ai", "human"}:
+        filtered = [c for c in filtered if c.get("status") == status]
+    if consent_status in {"allowed", "paused", "unknown"}:
+        filtered = [c for c in filtered if c.get("consent_status") == consent_status]
+    if filter_name == "flagged":
+        filtered = [c for c in filtered if int(c.get("open_flags_count", 0)) > 0]
+    elif filter_name == "pushable":
+        filtered = [c for c in filtered if c.get("consent_status") == "allowed"]
+    elif filter_name == "draft":
+        filtered = [c for c in filtered if int(c.get("draft_count", 0)) > 0]
+    if search_text:
+        def matches(conversation: Dict) -> bool:
+            haystack = " ".join([
+                str(conversation.get("phone", "")),
+                str(conversation.get("display_name", "")),
+                str(conversation.get("latest_message", "")),
+                " ".join([str(tag) for tag in conversation.get("tags", [])]),
+                str(conversation.get("notes", "")),
+            ]).lower()
+            if search_text in haystack:
+                return True
+            profile = store.get_profile(str(conversation.get("phone", "")))
+            return search_text in json.dumps(profile, ensure_ascii=False).lower()
+
+        filtered = [c for c in filtered if matches(c)]
+    return filtered
 
 
 # ============== FastAPI 應用 ==============
@@ -531,8 +642,8 @@ async def admin_dashboard(request: Request):
     aside, section { border-right: 1px solid var(--line); background: #fff; min-width: 0; }
     aside:last-child { border-right: 0; }
     .toolbar { padding: 12px; border-bottom: 1px solid var(--line); display: flex; gap: 8px; align-items: center; }
-    input, textarea, button { font: inherit; }
-    input, textarea { width: 100%; border: 1px solid var(--line); border-radius: 6px; padding: 9px 10px; background: #fff; }
+    input, textarea, button, select { font: inherit; }
+    input, textarea, select { width: 100%; border: 1px solid var(--line); border-radius: 6px; padding: 9px 10px; background: #fff; }
     textarea { min-height: 88px; resize: vertical; }
     button { border: 1px solid var(--line); background: #fff; border-radius: 6px; padding: 8px 10px; cursor: pointer; white-space: nowrap; }
     button.primary { background: var(--brand); color: #fff; border-color: var(--brand); }
@@ -557,6 +668,10 @@ async def admin_dashboard(request: Request):
     .flag, .match { border: 1px solid var(--line); border-radius: 6px; padding: 8px; margin-top: 8px; background: #fff; }
     .match strong { display: block; margin-bottom: 4px; }
     .match textarea { min-height: 120px; margin-top: 8px; }
+    .stack { display: grid; gap: 8px; }
+    .chips { display: flex; gap: 6px; flex-wrap: wrap; }
+    .chip { display: inline-flex; gap: 4px; align-items: center; border: 1px solid var(--line); border-radius: 999px; padding: 5px 8px; font-size: 12px; background: #fff; }
+    .state { display: grid; gap: 4px; font-size: 13px; background: #f4f5f2; border-radius: 6px; padding: 10px; }
     pre { margin: 0; white-space: pre-wrap; word-break: break-word; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; background: #f4f5f2; padding: 10px; border-radius: 6px; }
     @media (max-width: 900px) { main { grid-template-columns: 1fr; } aside, section { min-height: 260px; border-right: 0; border-bottom: 1px solid var(--line); } .messages { height: 360px; } }
   </style>
@@ -568,7 +683,17 @@ async def admin_dashboard(request: Request):
   </header>
   <main>
     <aside>
-      <div class="toolbar"><input id="search" placeholder="搜尋電話或訊息" oninput="renderList()"></div>
+      <div class="toolbar" style="display:grid; grid-template-columns: 1fr; gap:8px">
+        <input id="search" placeholder="搜尋電話、訊息、Profile" oninput="loadConversations()">
+        <select id="filterStatus" onchange="loadConversations()">
+          <option value="">全部對話</option>
+          <option value="human">人工接手</option>
+          <option value="ai">AI 自動</option>
+          <option value="flagged">有待處理</option>
+          <option value="pushable">可推送</option>
+          <option value="draft">有草稿</option>
+        </select>
+      </div>
       <div class="toolbar">
         <button onclick="loadFlags()">不確定隊列</button>
         <button onclick="loadMatches()">主動匹配</button>
@@ -588,9 +713,23 @@ async def admin_dashboard(request: Request):
     <aside>
       <div class="sidebody">
         <div class="kv"><div class="label">狀態</div><div id="status">-</div></div>
+        <div class="kv"><div class="label">Agent State</div><div id="agentState" class="state">未選擇</div></div>
         <div style="display:flex; gap:8px; flex-wrap:wrap">
           <button class="warn" onclick="takeover()">人工接手</button>
           <button onclick="resumeAi()">恢復 AI</button>
+        </div>
+        <div class="kv stack">
+          <div class="label">結構化 Profile</div>
+          <div class="mini">孩子年齡</div>
+          <div id="profileAgeGroups" class="chips"></div>
+          <div class="mini">家長痛點</div>
+          <div id="profilePainPoints" class="chips"></div>
+          <div class="mini">對象</div>
+          <select id="profileTarget"></select>
+          <div class="mini">主題</div>
+          <select id="profileTopic"></select>
+          <textarea id="profilePainSummary" placeholder="痛點摘要，例如：青春期壓力和親子衝突"></textarea>
+          <button onclick="saveProfile()">儲存 Profile</button>
         </div>
         <div class="kv">
           <div class="label">家長標籤</div>
@@ -610,7 +749,7 @@ async def admin_dashboard(request: Request):
           <textarea id="proactiveNotes" placeholder="推送偏好或同意來源"></textarea>
           <button onclick="saveMeta()">儲存標籤/備註/同意</button>
         </div>
-        <div class="kv"><div class="label">記憶</div><pre id="profile">{}</pre></div>
+        <div class="kv"><details><summary class="label">原始 Profile JSON</summary><pre id="profile">{}</pre></details></div>
         <div class="kv"><div class="label">上次查詢</div><pre id="lastQuery">{}</pre></div>
         <div class="kv"><div class="label">不確定隊列</div><div id="flags" class="mini">尚未載入</div></div>
         <div class="kv"><div class="label">主動匹配草稿</div><div id="matches" class="mini">尚未產生</div></div>
@@ -641,21 +780,63 @@ async def admin_dashboard(request: Request):
       return String(text || "").replace(/[&<>"']/g, c => map[c]);
     }
     async function loadConversations() {
-      const data = await api("/api/whatsapp/conversations");
+      const params = new URLSearchParams();
+      params.set("limit", "100");
+      const q = document.getElementById("search").value.trim();
+      const filter = document.getElementById("filterStatus").value;
+      if (q) params.set("search", q);
+      if (filter === "ai" || filter === "human") {
+        params.set("status", filter);
+      } else if (filter) {
+        params.set("filter", filter);
+      }
+      const data = await api("/api/whatsapp/conversations?" + params.toString());
       conversations = data.conversations || [];
       renderList();
       if (currentPhone) await openChat(currentPhone);
     }
     function renderList() {
-      const q = document.getElementById("search").value.trim().toLowerCase();
       document.getElementById("list").innerHTML = conversations
-        .filter(c => !q || c.phone.includes(q) || String(c.latest_message || "").toLowerCase().includes(q))
         .map(c => `<div class="row ${c.phone === currentPhone ? "active" : ""}" onclick="openChat('${esc(c.phone)}')">
           <div class="phone">${esc(c.phone)}</div>
           <div class="latest">${esc(c.latest_message || "")}</div>
           <span class="pill ${c.status === "human" ? "human" : ""}">${c.status === "human" ? "人工接手" : "AI 自動"}</span>
           <span class="pill">${c.consent_status === "allowed" ? "可推送" : c.consent_status === "paused" ? "暫停推送" : "未同意"}</span>
+          ${Number(c.open_flags_count || 0) ? `<span class="pill">待處理 ${Number(c.open_flags_count || 0)}</span>` : ""}
+          ${Number(c.draft_count || 0) ? `<span class="pill">草稿 ${Number(c.draft_count || 0)}</span>` : ""}
         </div>`).join("");
+    }
+    function renderAgentState(state) {
+      document.getElementById("agentState").innerHTML = `
+        <div>狀態：${state.profile_ready ? "資料足夠" : "需要補資料"}</div>
+        <div>下一步：${esc(state.recommended_action || "-")}</div>
+        <div>缺少：${esc((state.missing_fields || []).join(", ") || "無")}</div>
+        <div>待處理：${Number(state.open_flags_count || 0)} · 草稿：${Number(state.draft_count || 0)}</div>
+      `;
+    }
+    function renderCheckboxGroup(containerId, name, options, selected) {
+      const chosen = new Set(selected || []);
+      document.getElementById(containerId).innerHTML = (options || []).map(value => `
+        <label class="chip">
+          <input type="checkbox" name="${name}" value="${esc(value)}" ${chosen.has(value) ? "checked" : ""}>
+          ${esc(value)}
+        </label>
+      `).join("");
+    }
+    function checkedValues(name) {
+      return Array.from(document.querySelectorAll(`input[name="${name}"]:checked`)).map(el => el.value);
+    }
+    function setSelectOptions(id, options, selected, emptyLabel) {
+      document.getElementById(id).innerHTML = [`<option value="">${esc(emptyLabel)}</option>`]
+        .concat((options || []).map(value => `<option value="${esc(value)}" ${value === selected ? "selected" : ""}>${esc(value)}</option>`))
+        .join("");
+    }
+    function renderProfileControls(profile, options) {
+      renderCheckboxGroup("profileAgeGroups", "profileAgeGroup", options.age_groups || [], profile.age_groups || []);
+      renderCheckboxGroup("profilePainPoints", "profilePainPoint", options.pain_points || [], profile.pain_points || []);
+      setSelectOptions("profileTarget", options.targets || [], profile.target || "", "未設定");
+      setSelectOptions("profileTopic", options.topics || [], profile.topic || "", "未設定");
+      document.getElementById("profilePainSummary").value = profile.pain_summary || "";
     }
     async function openChat(phone) {
       currentPhone = phone;
@@ -668,6 +849,23 @@ async def admin_dashboard(request: Request):
       document.getElementById("proactiveNotes").value = data.conversation.proactive_notes || "";
       document.getElementById("profile").textContent = JSON.stringify(data.profile || {}, null, 2);
       document.getElementById("lastQuery").textContent = JSON.stringify(data.last_query || {}, null, 2);
+      renderAgentState(data.agent_state || {});
+      renderProfileControls(data.profile || {}, data.profile_options || {});
+      document.getElementById("flags").innerHTML = (data.flags || []).length ? (data.flags || []).map(f => `
+        <div class="flag">
+          <strong>${esc(f.flag_type)} · ${esc(f.phone)}</strong>
+          <div>${esc(f.summary)}</div>
+          <button onclick="resolveFlag(${Number(f.id)})">標記已處理</button>
+        </div>`).join("") : "目前沒有待處理項目";
+      document.getElementById("matches").innerHTML = (data.drafts || []).length ? (data.drafts || []).map(d => `
+        <div class="match">
+          <strong>草稿 #${Number(d.id)}</strong>
+          <div class="mini">${esc(d.updated_at || "")}</div>
+          <textarea id="draft-${Number(d.id)}">${esc(d.draft_text || "")}</textarea>
+          <button onclick="saveDraft(${Number(d.id)})">儲存修改</button>
+          <button onclick="sendQueuedDraft(${Number(d.id)})">發送</button>
+          <button onclick="skipDraft(${Number(d.id)})">略過</button>
+        </div>`).join("") : "目前沒有待發草稿";
       document.getElementById("messages").innerHTML = (data.messages || []).map(m => `
         <div class="bubble ${m.direction}">
           <div class="meta">${esc(m.source)} · ${esc(m.created_at)}</div>${esc(m.body)}
@@ -683,6 +881,20 @@ async def admin_dashboard(request: Request):
       await api("/api/whatsapp/conversations/" + encodeURIComponent(currentPhone), {
         method: "POST",
         body: JSON.stringify({tags, notes, consent_status, proactive_notes})
+      });
+      await loadConversations();
+    }
+    async function saveProfile() {
+      if (!currentPhone) return;
+      await api("/api/whatsapp/conversations/" + encodeURIComponent(currentPhone) + "/profile", {
+        method: "POST",
+        body: JSON.stringify({
+          age_groups: checkedValues("profileAgeGroup"),
+          pain_points: checkedValues("profilePainPoint"),
+          target: document.getElementById("profileTarget").value,
+          topic: document.getElementById("profileTopic").value,
+          pain_summary: document.getElementById("profilePainSummary").value
+        })
       });
       await loadConversations();
     }
@@ -812,11 +1024,25 @@ async def admin_dashboard(request: Request):
 
 
 @app.get("/api/whatsapp/conversations")
-async def api_whatsapp_conversations(request: Request, limit: int = 50):
+async def api_whatsapp_conversations(
+    request: Request,
+    limit: int = 50,
+    status: str = "",
+    filter: str = "",
+    search: str = "",
+    consent_status: str = "",
+):
     """List WhatsApp parent conversations for the admin console."""
     require_admin_request(request)
     store = get_wa_memory_store()
-    conversations = store.list_conversations(limit=limit)
+    conversations = _filter_conversations(
+        store,
+        store.list_conversations(limit=max(limit, 200)),
+        status=status,
+        consent_status=consent_status,
+        filter=filter,
+        search=search,
+    )[:max(1, min(int(limit or 50), 200))]
     return {"total": len(conversations), "conversations": conversations}
 
 
@@ -825,11 +1051,17 @@ async def api_whatsapp_conversation(phone: str, request: Request, limit: int = 1
     """Return one conversation with transcript and agent memory."""
     require_admin_request(request)
     store = get_wa_memory_store()
+    conversation = store.get_conversation(phone)
+    profile = store.get_profile(phone)
     return {
-        "conversation": store.get_conversation(phone),
-        "profile": store.get_profile(phone),
+        "conversation": conversation,
+        "profile": profile,
         "last_query": store.get_last_query(phone),
         "messages": store.get_messages(phone, limit=limit),
+        "flags": store.list_agent_flags(unresolved_only=True, phone=phone, limit=50),
+        "drafts": store.list_proactive_drafts(status="draft", phone=phone, limit=20),
+        "agent_state": _build_agent_state(store, phone, profile, conversation),
+        "profile_options": _profile_options(),
     }
 
 
@@ -850,6 +1082,34 @@ async def api_whatsapp_update_conversation(
         proactive_notes=payload.proactive_notes or None,
     )
     return {"success": True, "conversation": conversation}
+
+
+@app.post("/api/whatsapp/conversations/{phone}/profile")
+async def api_whatsapp_update_profile(
+    phone: str,
+    payload: ProfileUpdateRequest,
+    request: Request,
+):
+    """Update the structured AI profile that future recommendations use."""
+    require_admin_request(request)
+    handler = get_wa_handler()
+    if not handler:
+        handler = WhatsAppHandler(memory_store=get_wa_memory_store())
+    try:
+        payload_data = payload.model_dump() if hasattr(payload, "model_dump") else payload.dict()
+        profile = handler.update_profile_from_admin(phone, payload_data)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    store = handler._memory
+    conversation = store.get_conversation(phone)
+    return {
+        "success": True,
+        "profile": profile,
+        "conversation": conversation,
+        "agent_state": _build_agent_state(store, phone, profile, conversation),
+        "profile_options": _profile_options(),
+    }
 
 
 @app.post("/api/whatsapp/conversations/{phone}/takeover")
