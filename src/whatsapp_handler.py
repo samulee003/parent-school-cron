@@ -48,6 +48,10 @@ PROACTIVE_ALLOW_KEYWORDS = {
     "同意收課程提醒", "同意收提醒", "同意推送", "可以推送",
     "可以提醒", "開啟推送", "恢復推送", "接收推送", "收課程提醒",
 }
+PROACTIVE_DENY_KEYWORDS = {
+    "不同意推送", "暫時不同意推送", "暂时不同意推送", "不同意收課程提醒",
+    "不同意收提醒", "未同意推送", "暫不同意推送", "暂不同意推送",
+}
 PROACTIVE_PAUSE_KEYWORDS = {
     "暫停推送", "暂停推送", "停止推送", "取消推送", "不要推送",
     "不用推送", "不想收到", "唔好推送", "停止提醒", "暫停提醒", "暂停提醒",
@@ -141,6 +145,29 @@ PAIN_POINT_RULES = [
         ),
     },
 ]
+
+ONBOARDING_QUESTION = (
+    "我先幫你縮窄，不直接丟一堆課程。\n\n"
+    "小朋友幾多歲？最近比較想處理："
+    "*情緒*、*學習*、*親子溝通*、*升學壓力*，還是其他？"
+)
+
+ONBOARDING_CONCERN_QUESTION = (
+    "收到，我先記住孩子年齡。\n\n"
+    "最近最想處理哪方面？"
+    "可以直接回覆：*情緒*、*學習*、*親子溝通*、*升學壓力*，或用一句話說明。"
+)
+
+ONBOARDING_AGE_QUESTION = (
+    "收到，我先記住你關心的方向。\n\n"
+    "小朋友幾多歲？例如：*4歲*、*小學*、*13歲*。"
+)
+
+PROACTIVE_CONSENT_PROMPT = (
+    "\n\n之後如果有貼近你情況的新課程，我可以偶爾提醒你。"
+    "回覆「同意推送」即可。"
+)
+ONBOARDING_NOTE_MARKER = "[[ai:onboarding]]"
 
 
 def get_phone_number_id() -> str:
@@ -571,6 +598,8 @@ class WhatsAppHandler:
         normalized = WhatsAppHandler._normalize_command(text)
         if not normalized:
             return ""
+        if any(keyword in normalized for keyword in PROACTIVE_DENY_KEYWORDS):
+            return "paused"
         if any(keyword in normalized for keyword in PROACTIVE_PAUSE_KEYWORDS):
             return "paused"
         if any(keyword in normalized for keyword in PROACTIVE_ALLOW_KEYWORDS):
@@ -943,11 +972,13 @@ class WhatsAppHandler:
         return any(profile.get(k) for k in ["age_group", "age_groups", "target", "topic", "pain_points"])
 
     def _profile_ready_for_recommendation(self, profile: Dict[str, Any]) -> bool:
-        if self._profile_age_groups(profile):
-            return True
-        if profile.get("pain_points"):
+        if not self._profile_age_groups(profile):
             return False
-        return bool(profile.get("target") or profile.get("topic"))
+        return bool(
+            profile.get("pain_points")
+            or profile.get("target")
+            or profile.get("topic")
+        )
 
     @staticmethod
     def _topic_for_exact_filter(profile: Dict[str, Any]) -> str:
@@ -969,33 +1000,99 @@ class WhatsAppHandler:
             parts.append("痛點：" + "、".join(profile["pain_points"][:3]))
         return "我會先按「" + " / ".join(parts) + "」幫你縮窄。"
 
+    def _profile_tag_labels(self, profile: Dict[str, Any]) -> List[str]:
+        tags: List[str] = []
+        age_tag_labels = {
+            "0-2歲": "嬰幼",
+            "3-6歲": "幼兒",
+            "7-12歲": "兒童",
+            "13-18歲": "青少年",
+        }
+        for age_group in self._profile_age_groups(profile):
+            label = age_tag_labels.get(age_group, AGE_GROUP_LABELS.get(age_group, age_group))
+            if label and label not in tags:
+                tags.append(label)
+        for pain in [str(p) for p in profile.get("pain_points", []) if p]:
+            if pain not in tags:
+                tags.append(pain)
+        if profile.get("target") and str(profile["target"]) not in tags:
+            tags.append(str(profile["target"]))
+        if profile.get("topic") and str(profile["topic"]) not in tags:
+            tags.append(str(profile["topic"]))
+        return tags[:8]
+
+    def _onboarding_note_text(self, profile: Dict[str, Any]) -> str:
+        parts: List[str] = []
+        age_groups = self._profile_age_groups(profile)
+        if age_groups:
+            parts.append("、".join(age_groups))
+        if profile.get("pain_points"):
+            parts.append("、".join([str(p) for p in profile.get("pain_points", []) if p][:3]))
+        elif profile.get("topic"):
+            parts.append(str(profile["topic"]))
+        if profile.get("target"):
+            parts.append(str(profile["target"]))
+        return "onboarding: " + " / ".join([p for p in parts if p])
+
+    def _merge_onboarding_note(self, existing_notes: str, onboarding_note: str) -> str:
+        if not onboarding_note or onboarding_note == "onboarding: ":
+            return existing_notes
+
+        machine_note = f"{ONBOARDING_NOTE_MARKER} {onboarding_note}"
+        existing = str(existing_notes or "")
+        if not existing:
+            return machine_note
+
+        lines = existing.splitlines(keepends=True)
+        for index, line in enumerate(lines):
+            if line.lstrip().startswith(ONBOARDING_NOTE_MARKER):
+                newline = "\n" if line.endswith("\n") else ""
+                lines[index] = machine_note + newline
+                return "".join(lines)
+
+        separator = "" if existing.endswith("\n") else "\n"
+        return existing + separator + machine_note
+
+    def _sync_onboarding_conversation_meta(
+        self,
+        from_number: str,
+        profile: Dict[str, Any],
+    ) -> None:
+        if not self._profile_has_signal(profile):
+            return
+
+        conversation = self._memory.get_conversation(from_number)
+        existing_tags = [str(tag) for tag in conversation.get("tags", []) if tag]
+        tags = existing_tags[:]
+        for tag in self._profile_tag_labels(profile):
+            if tag not in tags:
+                tags.append(tag)
+
+        note = self._onboarding_note_text(profile)
+        notes = self._merge_onboarding_note(str(conversation.get("notes", "")), note)
+        kwargs: Dict[str, Any] = {}
+        if tags:
+            kwargs["tags"] = tags
+        if notes:
+            kwargs["notes"] = notes
+        if kwargs:
+            self._memory.update_conversation(from_number, **kwargs)
+
     def _onboarding_text(self, profile: Dict[str, Any]) -> str:
-        if self._profile_has_signal(profile):
-            missing = []
-            if not self._profile_age_groups(profile):
-                missing.append("孩子年齡")
-            if not (profile.get("topic") or profile.get("pain_points")):
-                missing.append("目前最想改善的事")
-            if missing:
-                return (
-                    f"收到，我先記住。\n{self._profile_text(profile)}\n\n"
-                    "為了之後可以主動幫你配課，請再補一句："
-                    f"*{ '、'.join(missing) }*。\n"
-                    "例：*孩子13歲，最近情緒壓力大*。"
-                )
-            return (
-                f"好，我先不把全部課程丟給你。\n{self._profile_text(profile)}\n\n"
-                "你可以補一句，例如：*想親子*、*想家長課*、*重視身心健康*。\n"
-                "我會按你的條件推薦少量課程。"
-            )
-        return (
-            "我先像簡短訪談一樣了解你，不直接丟一堆課程。\n\n"
-            "請回覆一句：*孩子年齡 + 最近最想改善的事*。\n"
-            "例：*孩子13歲，最近情緒壓力大*\n"
-            "例：*小朋友4歲，剛入學不太適應*\n"
-            "例：*孩子7歲，做功課很拖拉*\n\n"
-            "如果你真的要看全列表，回覆 *全部課程*。"
+        if not self._profile_has_signal(profile):
+            return ONBOARDING_QUESTION
+
+        has_age = bool(self._profile_age_groups(profile))
+        has_concern = bool(
+            profile.get("pain_points")
+            or profile.get("topic")
+            or profile.get("target")
         )
+        if has_age and not has_concern:
+            return ONBOARDING_CONCERN_QUESTION
+        if has_concern and not has_age:
+            return ONBOARDING_AGE_QUESTION
+        return ONBOARDING_QUESTION
 
     def _get_courses_text(
         self,
@@ -1539,9 +1636,9 @@ class WhatsAppHandler:
 
         llm_reply = self._get_llm_recommendation_text(from_number, user_text, profile)
         if llm_reply:
-            return llm_reply
+            return self._with_proactive_consent_prompt(from_number, llm_reply)
 
-        return self._get_courses_text(
+        reply = self._get_courses_text(
             from_number=from_number,
             age_group=self._profile_age_groups(profile),
             target=profile.get("target", ""),
@@ -1550,6 +1647,31 @@ class WhatsAppHandler:
             agentic=True,
             profile=profile,
         )
+        return self._with_proactive_consent_prompt(from_number, reply)
+
+    def _should_append_proactive_consent_prompt(self, from_number: str) -> bool:
+        conversation = self._memory.get_conversation(from_number)
+        return conversation.get("consent_status", "unknown") == "unknown"
+
+    @staticmethod
+    def _is_non_recommendation_reply(reply: str) -> bool:
+        return any(
+            marker in reply
+            for marker in [
+                "暫時沒有",
+                "課程資料暫時無法取得",
+                "課程資料獲取失敗",
+            ]
+        )
+
+    def _with_proactive_consent_prompt(self, from_number: str, reply: str) -> str:
+        if not reply or not self._should_append_proactive_consent_prompt(from_number):
+            return reply
+        if self._is_non_recommendation_reply(reply):
+            return reply
+        if "同意推送" in reply:
+            return reply
+        return reply + PROACTIVE_CONSENT_PROMPT
 
     def _get_course_detail_text(self, from_number: str, item_number: int) -> str:
         query = self._last_queries.get(from_number, {})
@@ -1625,6 +1747,7 @@ class WhatsAppHandler:
             return
 
         profile = self._update_profile_from_text(from_number, text)
+        self._sync_onboarding_conversation_meta(from_number, profile)
         age_groups = detect_age_groups(text)
         target = self._detect_positive_option(text, TARGETS)
         topic = self._detect_positive_option(text, TOPICS)

@@ -170,7 +170,13 @@ Current production template setup:
 Default WhatsApp behavior:
 
 - If the user says `課程` with no profile, ask one short narrowing question instead of dumping all courses.
-- If the user gives age or preference, update memory and recommend a small set.
+- First broad requests without profile should start the short onboarding question:
+  child age plus one concern area.
+- Only recommend courses after the profile has at least one age group and one
+  concern signal such as pain point, topic, target, or clear preference.
+- If the user gives age or preference, update memory; if the profile is still
+  incomplete, ask for the one missing piece instead of calling DeepSeek.
+- Ask for proactive push consent only after a useful recommendation, not before.
 - If the user says `更多`, `下一頁`, or `還有嗎`, continue the last persisted query.
 - If the user asks for all courses, paginate compactly.
 - Always include official detail links in course replies.

@@ -21,6 +21,7 @@
 - `13-18歲` / `青少年` 查詢已修正為會抓該年齡層來源，不只看首頁 open list。
 - 爬蟲已可抓目前列表全部課程，並進入詳情頁第二層內容，補上 `summary` 大綱與 `registration_url` 真正報名連結。
 - WhatsApp 推薦會把家長痛點映射到主題，並用課程大綱文字做匹配，不只看課程名稱。
+- WhatsApp onboarding 已改成兩步訪談：先問孩子年齡和關心痛點，資料足夠才推薦少量課程；推薦後才柔性提示 `同意推送`。
 - 根目錄 `/` 是給 Meta / 家長看的公開 landing page，`HEAD /` 也會回 200。
 - 已開始 Agentic Admin MVP：記錄 inbound/outbound transcript、conversation status、人工接手/恢復 AI、人工回覆 API、受 `ADMIN_SECRET` 保護的 `/admin` 初版介面。
 - `/admin` 已有家長標籤、備註、不確定/無匹配隊列、主動匹配草稿。
@@ -65,7 +66,7 @@ python -B -m compileall src
 git diff --check
 ```
 
-最近一次已知測試數量：`64` 個 unittest 通過。
+最近一次已知測試數量：`74` 個 unittest 通過。
 
 2026-05-21 實站爬蟲驗證：
 
@@ -170,9 +171,9 @@ Next useful build:
 
 1. Recheck Meta WhatsApp Manager until `parent_course_reminder` becomes approved/active.
 2. After approval, send one real outside-window template test from `/admin` or the proactive send API.
-3. Add persistent proactive draft queue/history beyond transcript records.
-4. Add a softer interview phrase that asks consent during onboarding.
-5. Add privacy retention/pruning for old transcripts and LLM cache entries.
+3. Add richer proactive draft filters/history search beyond basic status listing.
+4. Add privacy retention/pruning for old transcripts and LLM cache entries.
+5. Observe real parent onboarding conversations and tune the wording if parents still ask for raw lists too often.
 
 Recommended table direction:
 

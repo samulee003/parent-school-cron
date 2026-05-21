@@ -132,15 +132,98 @@ class WhatsAppHandlerTests(unittest.TestCase):
             cookies["parent_school_admin"] = cookie
         return FakeRequest(b"{}", headers, cookies)
 
-    def test_courses_keyword_without_profile_asks_for_context(self):
+    def test_courses_keyword_without_profile_asks_parent_interview_question(self):
         handler, sent = self.make_handler()
 
         handler._handle_text_message("85360000000", "課程")
 
         self.assertEqual(sent[0][0], "85360000000")
-        self.assertIn("簡短訪談", sent[0][1])
-        self.assertIn("孩子年齡", sent[0][1])
+        self.assertIn("小朋友幾多歲", sent[0][1])
+        self.assertIn("情緒", sent[0][1])
+        self.assertIn("學習", sent[0][1])
+        self.assertIn("親子溝通", sent[0][1])
+        self.assertIn("升學壓力", sent[0][1])
         self.assertNotIn("嬰幼繪本氹氹轉", sent[0][1])
+
+    def test_complete_onboarding_answer_stores_memory_and_adds_soft_consent_prompt(self):
+        courses = [
+            Course(
+                id="c-health",
+                name="健康情緒與青少年同行",
+                date="2026/05/31 星期日 10:30-12:00",
+                date_parsed=None,
+                age_group="13-18歲",
+                age_groups=["13-18歲"],
+                topic="身心健康",
+                target="家長",
+                status="報名中",
+                detail_url="https://example.test/course/health",
+                summary="覺察青少年壓力與焦慮，學習親子衝突後真誠對話。",
+                registration_url="https://example.test/register/health",
+            )
+        ]
+        handler = WhatsAppHandler()
+        handler._get_bot = lambda: type("Bot", (), {"scraper": FakeCrawler(courses)})()
+        sent = []
+        handler._send_text = lambda to, text: sent.append((to, text)) or True
+
+        handler._handle_text_message("85360000000", "課程")
+        handler._handle_text_message("85360000000", "13歲，最近情緒壓力大")
+
+        profile = handler._memory.get_profile("85360000000")
+        conversation = handler._memory.get_conversation("85360000000")
+
+        self.assertEqual(profile["age_groups"], ["13-18歲"])
+        self.assertIn("情緒壓力", profile["pain_points"])
+        self.assertIn("健康情緒與青少年同行", sent[1][1])
+        self.assertIn("https://example.test/register/health", sent[1][1])
+        self.assertIn("同意推送", sent[1][1])
+        self.assertIn("青少年", conversation["tags"])
+        self.assertIn("情緒壓力", conversation["tags"])
+        self.assertIn("onboarding:", conversation["notes"])
+
+    def test_onboarding_age_only_asks_for_concern_without_calling_deepseek(self):
+        handler, sent = self.make_handler()
+
+        with patch.dict(os.environ, {"DEEPSEEK_API_KEY": "test-key"}, clear=False):
+            with patch("whatsapp_handler.requests.post") as post:
+                handler._handle_text_message("85360000000", "13歲")
+
+        self.assertFalse(post.called)
+        self.assertIn("最想處理", sent[0][1])
+        self.assertIn("情緒", sent[0][1])
+        self.assertNotIn("青少年親子溝通工作坊", sent[0][1])
+
+    def test_onboarding_pain_only_asks_for_child_age_without_calling_deepseek(self):
+        handler, sent = self.make_handler()
+
+        with patch.dict(os.environ, {"DEEPSEEK_API_KEY": "test-key"}, clear=False):
+            with patch("whatsapp_handler.requests.post") as post:
+                handler._handle_text_message("85360000000", "最近情緒壓力大")
+
+        self.assertFalse(post.called)
+        self.assertIn("小朋友幾多歲", sent[0][1])
+        self.assertNotIn("青少年親子溝通工作坊", sent[0][1])
+
+    def test_recommendation_does_not_repeat_consent_prompt_after_consent_set(self):
+        handler, sent = self.make_handler()
+        handler._memory.update_conversation("85360000000", consent_status="allowed")
+
+        handler._handle_text_message("85360000000", "小朋友1歲，想親子活動")
+
+        self.assertIn("嬰幼繪本氹氹轉", sent[0][1])
+        self.assertNotIn("同意推送", sent[0][1])
+
+    def test_onboarding_meta_preserves_operator_notes_verbatim(self):
+        handler, _ = self.make_handler()
+        operator_notes = "人工備註第一行\n\nonboarding: 這句是人工寫的，不是系統欄位\n最後一行"
+        handler._memory.update_conversation("85360000000", notes=operator_notes)
+
+        handler._handle_text_message("85360000000", "13歲，最近情緒壓力大")
+
+        notes = handler._memory.get_conversation("85360000000")["notes"]
+        self.assertIn(operator_notes, notes)
+        self.assertIn("[[ai:onboarding]] onboarding:", notes)
 
     def test_all_courses_returns_compact_course_objects_with_links(self):
         handler, sent = self.make_handler()
@@ -166,7 +249,7 @@ class WhatsAppHandlerTests(unittest.TestCase):
     def test_age_keyword_filters_courses(self):
         handler, sent = self.make_handler()
 
-        handler._handle_text_message("85360000000", "0-2歲")
+        handler._handle_text_message("85360000000", "0-2歲，想親子活動")
 
         self.assertIn("嬰幼繪本氹氹轉", sent[0][1])
         self.assertNotIn("青少年親子溝通工作坊", sent[0][1])
@@ -456,8 +539,9 @@ class WhatsAppHandlerTests(unittest.TestCase):
                 handler._handle_text_message("85360000000", "小朋友1歲，想親子活動")
 
         self.assertEqual(post.call_count, 1)
-        self.assertEqual(sent[0][1], "LLM 快取測試回覆")
-        self.assertEqual(sent[1][1], "LLM 快取測試回覆")
+        self.assertTrue(sent[0][1].startswith("LLM 快取測試回覆"))
+        self.assertTrue(sent[1][1].startswith("LLM 快取測試回覆"))
+        self.assertIn("同意推送", sent[0][1])
         self.assertEqual(handler._memory.get_llm_usage_count("85360000000"), 1)
 
     def test_deepseek_daily_limit_falls_back_without_api_call(self):
@@ -478,7 +562,8 @@ class WhatsAppHandlerTests(unittest.TestCase):
                 handler._handle_text_message("85360000000", "小朋友1歲，想家庭關係課程")
 
         self.assertEqual(post.call_count, 1)
-        self.assertEqual(sent[0][1], "LLM 第一次回覆")
+        self.assertTrue(sent[0][1].startswith("LLM 第一次回覆"))
+        self.assertIn("同意推送", sent[0][1])
         self.assertIn("嬰幼繪本氹氹轉", sent[1][1])
         self.assertIn("為什麼推薦", sent[1][1])
         self.assertEqual(handler._memory.get_llm_usage_count("85360000000"), 1)
@@ -521,7 +606,8 @@ class WhatsAppHandlerTests(unittest.TestCase):
                 handler._handle_text_message("85360000001", "小朋友1歲，想家庭關係課程")
 
         self.assertEqual(post.call_count, 1)
-        self.assertEqual(sent[0][1], "LLM 全域第一次回覆")
+        self.assertTrue(sent[0][1].startswith("LLM 全域第一次回覆"))
+        self.assertIn("同意推送", sent[0][1])
         self.assertIn("嬰幼繪本氹氹轉", sent[1][1])
         self.assertIn("為什麼推薦", sent[1][1])
         self.assertEqual(handler._memory.get_llm_usage_count("__global__"), 1)
@@ -585,7 +671,7 @@ class WhatsAppHandlerTests(unittest.TestCase):
         self.assertEqual([m["direction"] for m in messages], ["inbound", "outbound"])
         self.assertEqual([m["source"] for m in messages], ["parent", "ai"])
         self.assertEqual(messages[0]["body"], "課程")
-        self.assertIn("簡短訪談", messages[1]["body"])
+        self.assertIn("小朋友幾多歲", messages[1]["body"])
         conversations = handler._memory.list_conversations()
         self.assertEqual(conversations[0]["phone"], "85360000000")
         self.assertEqual(conversations[0]["status"], "ai")
@@ -622,6 +708,17 @@ class WhatsAppHandlerTests(unittest.TestCase):
         self.assertEqual(conversation["consent_status"], "paused")
         self.assertIn("暫停", sent[0][1])
 
+    def test_parent_denial_does_not_enable_proactive_push_from_whatsapp(self):
+        handler, sent = self.make_handler()
+
+        for index, message in enumerate(["不同意推送", "暫時不同意推送"]):
+            phone = f"8536000000{index}"
+            handler._handle_text_message(phone, message)
+
+            conversation = handler._memory.get_conversation(phone)
+            self.assertEqual(conversation["consent_status"], "paused")
+            self.assertIn("暫停", sent[index][1])
+
     def test_unknown_message_creates_uncertain_flag(self):
         handler, sent = self.make_handler()
 
@@ -655,6 +752,7 @@ class WhatsAppHandlerTests(unittest.TestCase):
         handler._handle_text_message("85360000000", "孩子13歲，最近情緒壓力大")
 
         self.assertIn("暫時沒有", sent[0][1])
+        self.assertNotIn("同意推送", sent[0][1])
         flags = handler._memory.list_agent_flags()
         self.assertEqual(flags[0]["flag_type"], "no_match")
 
@@ -725,7 +823,7 @@ class WhatsAppHandlerTests(unittest.TestCase):
     def test_filter_by_target_keeps_list_focused(self):
         handler, sent = self.make_handler()
 
-        handler._handle_text_message("85360000000", "家長")
+        handler._handle_text_message("85360000000", "13歲，想家長課")
 
         self.assertIn("青少年親子溝通工作坊", sent[0][1])
         self.assertNotIn("嬰幼繪本氹氹轉", sent[0][1])
@@ -826,7 +924,7 @@ class WhatsAppHandlerTests(unittest.TestCase):
 
         handler._handle_text_message("85360000000", "孩子最近做功課很拖拉")
 
-        self.assertIn("孩子年齡", sent[0][1])
+        self.assertIn("小朋友幾多歲", sent[0][1])
         self.assertNotIn("只協助查詢和推薦", sent[0][1])
         profile = handler._load_profile("85360000000")
         self.assertEqual(profile["topic"], "學習與成就感")
@@ -838,7 +936,7 @@ class WhatsAppHandlerTests(unittest.TestCase):
         sent = []
         handler._send_text = lambda to, text: sent.append((to, text)) or True
 
-        handler._handle_text_message("85360000000", "青少年")
+        handler._handle_text_message("85360000000", "青少年，最近情緒壓力大")
 
         self.assertIn("健康情緒與青少年同行", sent[0][1])
         self.assertIn("https://example.test/course/c2", sent[0][1])
