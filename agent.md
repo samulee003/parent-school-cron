@@ -154,6 +154,13 @@ must use an approved WhatsApp template. Configure the template with
 `WHATSAPP_PROACTIVE_TEMPLATE_NAME` and optionally
 `WHATSAPP_PROACTIVE_TEMPLATE_LANGUAGE` (default `zh_HK`).
 
+Current production template setup:
+
+- Template name: `parent_course_reminder`
+- Meta UI language: `Chinese (HKG)`
+- API language code configured in Zeabur: `zh_HK`
+- Current Meta review status on 2026-05-21: pending review.
+
 ## Conversation Design Rules
 
 Default WhatsApp behavior:
@@ -228,8 +235,7 @@ Next:
 
 - Stronger proactive workflow: new course -> match parent memories -> review queue -> operator approve/send.
 - Persistent proactive draft queue/history beyond transcript records.
-- Create and approve the production Meta template in WhatsApp Manager, then set the
-  template name in Zeabur.
+- Recheck Meta WhatsApp Manager until `parent_course_reminder` is approved/active, then run one real template send test.
 
 When building this, prefer the existing FastAPI app and SQLite memory store first. Avoid adding a heavy frontend framework unless the dashboard grows beyond simple HTML/JS.
 

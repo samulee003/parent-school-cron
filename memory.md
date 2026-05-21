@@ -28,6 +28,8 @@
 - 已有 operator approval loop：主動匹配產生草稿，只有 `allowed` 家長可以由管理台批准發送。
 - WhatsApp 端已能直接更新主動推送同意：家長回覆 `同意推送` / `同意收課程提醒` 會變 `allowed`，回覆 `暫停推送` 會變 `paused`。
 - 已有 WhatsApp template 發送通道：主動草稿若超出 24 小時 customer service window，會自動改用 `WHATSAPP_PROACTIVE_TEMPLATE_NAME`；未配置模板時會阻止發送。
+- Meta WhatsApp Manager 已提交 production template `parent_course_reminder`，語言 `Chinese (HKG)`，目前狀態為審查中。
+- Zeabur 已設定 `WHATSAPP_PROACTIVE_TEMPLATE_NAME=parent_course_reminder` 與 `WHATSAPP_PROACTIVE_TEMPLATE_LANGUAGE=zh_HK`，並已重新部署。
 
 家長入口：
 
@@ -138,7 +140,7 @@ git diff --check
 
 ### Does not exist yet
 
-- Production Meta template approval and Zeabur variable setup.
+- Production Meta template approval is still pending in Meta review.
 - Persistent proactive draft queue/history beyond transcript records.
 
 ## Recommended Next Build
@@ -158,8 +160,8 @@ Already done in MVP:
 
 Next useful build:
 
-1. Create and approve the production WhatsApp template in Meta WhatsApp Manager.
-2. Set `WHATSAPP_PROACTIVE_TEMPLATE_NAME` and `WHATSAPP_PROACTIVE_TEMPLATE_LANGUAGE` in Zeabur.
+1. Recheck Meta WhatsApp Manager until `parent_course_reminder` becomes approved/active.
+2. After approval, send one real outside-window template test from `/admin` or the proactive send API.
 3. Add persistent proactive draft queue/history beyond transcript records.
 4. Add a softer interview phrase that asks consent during onboarding.
 5. Improve `/admin` auth beyond query-string secret before wider use.
