@@ -7,6 +7,8 @@ import logging
 import os
 import sys
 import json
+import hashlib
+import hmac
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Optional
@@ -33,6 +35,9 @@ cs_crypto: Optional[WeComCrypto] = None
 poller: Optional[WeComPoller] = None
 wa_handler: Optional[WhatsAppHandler] = None
 wa_memory: Optional[WhatsAppMemoryStore] = None
+
+ADMIN_SESSION_COOKIE = "parent_school_admin"
+ADMIN_SESSION_SALT = b"parent-school-admin-session-v1"
 
 
 def get_bot() -> ZeaburBot:
@@ -88,18 +93,63 @@ def get_wa_memory_store() -> WhatsAppMemoryStore:
 
 def require_secret(provided: str, env_keys: tuple[str, ...], label: str) -> None:
     """檢查管理/排程接口密鑰。"""
-    expected = ""
-    for key in env_keys:
-        expected = os.environ.get(key, "")
-        if expected:
-            break
+    expected = _first_configured_secret(env_keys)
 
     if not expected:
         logger.error("%s secret 未配置", label)
         raise HTTPException(status_code=500, detail=f"{label} secret not configured")
 
-    if provided != expected:
+    if not hmac.compare_digest(str(provided or ""), expected):
         raise HTTPException(status_code=401, detail="Unauthorized")
+
+
+def _first_configured_secret(env_keys: tuple[str, ...]) -> str:
+    for key in env_keys:
+        expected = os.environ.get(key, "")
+        if expected:
+            return expected
+    return ""
+
+
+def make_admin_session_token(secret: str) -> str:
+    """Derive a stable cookie token without storing the raw admin secret."""
+    return hmac.new(
+        str(secret or "").encode("utf-8"),
+        ADMIN_SESSION_SALT,
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def _authorization_bearer(request: Request) -> str:
+    auth = request.headers.get("authorization") or request.headers.get("Authorization") or ""
+    prefix = "Bearer "
+    if auth.startswith(prefix):
+        return auth[len(prefix):].strip()
+    return ""
+
+
+def require_admin_request(request: Request) -> None:
+    """Authorize admin APIs via HttpOnly session cookie or Authorization header."""
+    expected = _first_configured_secret(("ADMIN_SECRET",))
+    if not expected:
+        logger.error("Admin secret 未配置")
+        raise HTTPException(status_code=500, detail="Admin secret not configured")
+
+    bearer = _authorization_bearer(request)
+    if bearer and hmac.compare_digest(bearer, expected):
+        return
+
+    cookie = request.cookies.get(ADMIN_SESSION_COOKIE, "")
+    expected_cookie = make_admin_session_token(expected)
+    if cookie and hmac.compare_digest(cookie, expected_cookie):
+        return
+
+    raise HTTPException(status_code=401, detail="Unauthorized")
+
+
+def _admin_cookie_secure() -> bool:
+    raw = os.environ.get("ADMIN_COOKIE_SECURE", "true").strip().lower()
+    return raw not in {"0", "false", "no", "off"}
 
 
 # ============== Pydantic 模型 ==============
@@ -129,6 +179,10 @@ class StatusResponse(BaseModel):
 
 class AdminMessageRequest(BaseModel):
     body: str
+
+
+class AdminLoginRequest(BaseModel):
+    secret: str = ""
 
 
 class ConversationUpdateRequest(BaseModel):
@@ -356,11 +410,97 @@ async def api_users(secret: str = ""):
 
 # ============== WhatsApp Agentic Admin ==============
 
-@app.get("/admin", response_class=HTMLResponse)
-async def admin_dashboard(secret: str = ""):
-    """Minimal WhatsApp operator console."""
-    require_secret(secret, ("ADMIN_SECRET",), "Admin")
+def _admin_login_html() -> str:
     return """<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>WhatsApp 家長學堂接手台登入</title>
+  <style>
+    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f6f7f4; color: #1f2933; }
+    main { min-height: 100vh; display: grid; place-items: center; padding: 24px; }
+    form { width: min(360px, 100%); background: #fff; border: 1px solid #d9ded7; border-radius: 8px; padding: 22px; display: grid; gap: 12px; }
+    h1 { font-size: 18px; margin: 0 0 6px; }
+    input, button { font: inherit; border-radius: 6px; padding: 10px 12px; }
+    input { border: 1px solid #d9ded7; }
+    button { border: 1px solid #0f8f5f; background: #0f8f5f; color: #fff; cursor: pointer; }
+    .msg { min-height: 20px; color: #9b2c2c; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <main>
+    <form id="login">
+      <h1>WhatsApp 家長學堂接手台</h1>
+      <input id="secret" type="password" autocomplete="current-password" placeholder="管理密鑰" autofocus>
+      <button type="submit">登入</button>
+      <div id="msg" class="msg"></div>
+    </form>
+  </main>
+  <script>
+    document.getElementById("login").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const secret = document.getElementById("secret").value;
+      const res = await fetch("/admin/login", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({secret})
+      });
+      if (res.ok) {
+        location.href = "/admin";
+      } else {
+        document.getElementById("msg").textContent = "登入失敗";
+      }
+    });
+  </script>
+</body>
+</html>"""
+
+
+@app.post("/admin/login")
+async def admin_login(payload: AdminLoginRequest):
+    """Create an HttpOnly admin session cookie without putting secrets in URLs."""
+    expected = _first_configured_secret(("ADMIN_SECRET",))
+    if not expected:
+        logger.error("Admin secret 未配置")
+        raise HTTPException(status_code=500, detail="Admin secret not configured")
+    if not hmac.compare_digest(payload.secret or "", expected):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+    response = JSONResponse({"success": True})
+    response.set_cookie(
+        ADMIN_SESSION_COOKIE,
+        make_admin_session_token(expected),
+        max_age=24 * 60 * 60,
+        httponly=True,
+        secure=_admin_cookie_secure(),
+        samesite="lax",
+    )
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@app.post("/admin/logout")
+async def admin_logout():
+    response = JSONResponse({"success": True})
+    response.delete_cookie(ADMIN_SESSION_COOKIE)
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
+@app.get("/admin", response_class=HTMLResponse)
+async def admin_dashboard(request: Request):
+    """Minimal WhatsApp operator console."""
+    try:
+        require_admin_request(request)
+    except HTTPException as exc:
+        if exc.status_code == 401:
+            return HTMLResponse(
+                _admin_login_html(),
+                headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
+            )
+        raise
+    return HTMLResponse("""<!doctype html>
 <html lang="zh-Hant">
 <head>
   <meta charset="utf-8">
@@ -461,14 +601,12 @@ async def admin_dashboard(secret: str = ""):
     </aside>
   </main>
   <script>
-    const secret = new URLSearchParams(location.search).get("secret") || "";
     let conversations = [];
     let currentPhone = "";
     let matchDrafts = {};
 
     async function api(path, options = {}) {
-      const sep = path.includes("?") ? "&" : "?";
-      const res = await fetch(path + sep + "secret=" + encodeURIComponent(secret), {
+      const res = await fetch(path, {
         headers: {"Content-Type": "application/json"},
         ...options
       });
@@ -591,22 +729,22 @@ async def admin_dashboard(secret: str = ""):
     loadConversations().catch(err => alert(err.message));
   </script>
 </body>
-</html>"""
+</html>""", headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"})
 
 
 @app.get("/api/whatsapp/conversations")
-async def api_whatsapp_conversations(secret: str = "", limit: int = 50):
+async def api_whatsapp_conversations(request: Request, limit: int = 50):
     """List WhatsApp parent conversations for the admin console."""
-    require_secret(secret, ("ADMIN_SECRET",), "Admin")
+    require_admin_request(request)
     store = get_wa_memory_store()
     conversations = store.list_conversations(limit=limit)
     return {"total": len(conversations), "conversations": conversations}
 
 
 @app.get("/api/whatsapp/conversations/{phone}")
-async def api_whatsapp_conversation(phone: str, secret: str = "", limit: int = 100):
+async def api_whatsapp_conversation(phone: str, request: Request, limit: int = 100):
     """Return one conversation with transcript and agent memory."""
-    require_secret(secret, ("ADMIN_SECRET",), "Admin")
+    require_admin_request(request)
     store = get_wa_memory_store()
     return {
         "conversation": store.get_conversation(phone),
@@ -620,10 +758,10 @@ async def api_whatsapp_conversation(phone: str, secret: str = "", limit: int = 1
 async def api_whatsapp_update_conversation(
     phone: str,
     payload: ConversationUpdateRequest,
-    secret: str = "",
+    request: Request,
 ):
     """Update operator-only labels and notes for a WhatsApp parent."""
-    require_secret(secret, ("ADMIN_SECRET",), "Admin")
+    require_admin_request(request)
     conversation = get_wa_memory_store().update_conversation(
         phone,
         display_name=payload.display_name or None,
@@ -636,17 +774,17 @@ async def api_whatsapp_update_conversation(
 
 
 @app.post("/api/whatsapp/conversations/{phone}/takeover")
-async def api_whatsapp_takeover(phone: str, secret: str = ""):
+async def api_whatsapp_takeover(phone: str, request: Request):
     """Pause AI auto-replies for a parent while an operator handles them."""
-    require_secret(secret, ("ADMIN_SECRET",), "Admin")
+    require_admin_request(request)
     conversation = get_wa_memory_store().set_conversation_status(phone, "human")
     return {"success": True, "conversation": conversation}
 
 
 @app.post("/api/whatsapp/conversations/{phone}/resume-ai")
-async def api_whatsapp_resume_ai(phone: str, secret: str = ""):
+async def api_whatsapp_resume_ai(phone: str, request: Request):
     """Resume AI auto-replies for a parent."""
-    require_secret(secret, ("ADMIN_SECRET",), "Admin")
+    require_admin_request(request)
     conversation = get_wa_memory_store().set_conversation_status(phone, "ai")
     return {"success": True, "conversation": conversation}
 
@@ -655,10 +793,10 @@ async def api_whatsapp_resume_ai(phone: str, secret: str = ""):
 async def api_whatsapp_admin_message(
     phone: str,
     payload: AdminMessageRequest,
-    secret: str = "",
+    request: Request,
 ):
     """Send a manual WhatsApp reply from the operator console."""
-    require_secret(secret, ("ADMIN_SECRET",), "Admin")
+    require_admin_request(request)
     handler = get_wa_handler()
     if not handler:
         raise HTTPException(status_code=500, detail="WhatsApp is not configured")
@@ -668,9 +806,9 @@ async def api_whatsapp_admin_message(
 
 
 @app.get("/api/whatsapp/flags")
-async def api_whatsapp_flags(secret: str = "", unresolved_only: bool = True, limit: int = 100):
+async def api_whatsapp_flags(request: Request, unresolved_only: bool = True, limit: int = 100):
     """List AI uncertainty/no-match items for operator review."""
-    require_secret(secret, ("ADMIN_SECRET",), "Admin")
+    require_admin_request(request)
     flags = get_wa_memory_store().list_agent_flags(
         unresolved_only=unresolved_only,
         limit=limit,
@@ -679,9 +817,9 @@ async def api_whatsapp_flags(secret: str = "", unresolved_only: bool = True, lim
 
 
 @app.post("/api/whatsapp/flags/{flag_id}/resolve")
-async def api_whatsapp_resolve_flag(flag_id: int, secret: str = ""):
+async def api_whatsapp_resolve_flag(flag_id: int, request: Request):
     """Resolve an AI uncertainty/no-match queue item."""
-    require_secret(secret, ("ADMIN_SECRET",), "Admin")
+    require_admin_request(request)
     return {
         "success": get_wa_memory_store().resolve_agent_flag(flag_id),
     }
@@ -689,13 +827,13 @@ async def api_whatsapp_resolve_flag(flag_id: int, secret: str = ""):
 
 @app.get("/api/whatsapp/proactive-matches")
 async def api_whatsapp_proactive_matches(
-    secret: str = "",
+    request: Request,
     parent_limit: int = 100,
     courses_per_parent: int = 3,
     allowed_only: bool = False,
 ):
     """Draft proactive course matches from stored family memories."""
-    require_secret(secret, ("ADMIN_SECRET",), "Admin")
+    require_admin_request(request)
     handler = get_wa_handler()
     if not handler:
         raise HTTPException(status_code=500, detail="WhatsApp is not configured")
@@ -711,10 +849,10 @@ async def api_whatsapp_proactive_matches(
 async def api_whatsapp_send_proactive_match(
     phone: str,
     payload: ProactiveSendRequest,
-    secret: str = "",
+    request: Request,
 ):
     """Send an operator-approved proactive draft to a consented parent."""
-    require_secret(secret, ("ADMIN_SECRET",), "Admin")
+    require_admin_request(request)
     store = get_wa_memory_store()
     conversation = store.get_conversation(phone)
     if conversation.get("consent_status") != "allowed":
@@ -879,7 +1017,10 @@ async def whatsapp_webhook(request: Request, background_tasks: BackgroundTasks):
     try:
         body = await request.body()
         app_secret = os.environ.get("WHATSAPP_APP_SECRET", "")
-        if app_secret and not is_valid_meta_signature(
+        if not app_secret:
+            logger.error("WHATSAPP_APP_SECRET 未配置，拒絕 WhatsApp webhook")
+            raise HTTPException(status_code=500, detail="WhatsApp app secret not configured")
+        if not is_valid_meta_signature(
             body,
             request.headers.get("x-hub-signature-256", ""),
             app_secret,

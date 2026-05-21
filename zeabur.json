@@ -43,6 +43,11 @@
       "key": "ADMIN_SECRET",
       "description": "Admin endpoint secret",
       "required": true
+    },
+    {
+      "key": "ADMIN_COOKIE_SECURE",
+      "description": "Whether admin session cookies require HTTPS; keep true in production",
+      "required": false
     }
   ]
 }

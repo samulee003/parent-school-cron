@@ -34,9 +34,9 @@
 | `WHATSAPP_PHONE_NUMBER_ID` | WhatsApp Cloud API 發送消息 |
 | `WHATSAPP_ACCESS_TOKEN` | WhatsApp Cloud API token，正式環境用 Permanent token |
 | `WHATSAPP_VERIFY_TOKEN` | Meta webhook GET 驗證 |
-| `WHATSAPP_APP_SECRET` | Meta POST webhook 簽名驗證 |
+| `WHATSAPP_APP_SECRET` | Meta POST webhook 簽名驗證，必填 |
 | `CRON_SECRET` | `/api/cron` |
-| `ADMIN_SECRET` | `/api/push`、`/api/users` |
+| `ADMIN_SECRET` | `/admin` 管理台登入 |
 
 ## 5. API
 
@@ -45,7 +45,9 @@
 | `GET` | `/` | 基本狀態 | 無 |
 | `GET` | `/health` | 詳細狀態 | 無 |
 | `GET` | `/api/whatsapp/webhook` | Meta webhook 驗證 | `WHATSAPP_VERIFY_TOKEN` |
-| `POST` | `/api/whatsapp/webhook` | 接收 WhatsApp 消息 | `WHATSAPP_APP_SECRET` 簽名，若已配置 |
+| `POST` | `/api/whatsapp/webhook` | 接收 WhatsApp 消息 | 必須通過 `WHATSAPP_APP_SECRET` 簽名 |
+| `GET` | `/admin` | WhatsApp 管理台 | HttpOnly cookie 或 Authorization Bearer |
+| `POST` | `/admin/login` | 管理台登入 | `ADMIN_SECRET` |
 | `POST` | `/api/cron?secret=...` | Cron 抓課程 | `CRON_SECRET` |
 | `POST` | `/api/push?secret=...` | 管理員手動推送 | `ADMIN_SECRET` 或 `CRON_SECRET` |
 | `GET` | `/api/users?secret=...` | 管理員查看用戶 | `ADMIN_SECRET` 或 `CRON_SECRET` |

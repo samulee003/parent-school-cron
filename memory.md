@@ -28,6 +28,9 @@
 - 已有 operator approval loop：主動匹配產生草稿，只有 `allowed` 家長可以由管理台批准發送。
 - WhatsApp 端已能直接更新主動推送同意：家長回覆 `同意推送` / `同意收課程提醒` 會變 `allowed`，回覆 `暫停推送` 會變 `paused`。
 - 已有 WhatsApp template 發送通道：主動草稿若超出 24 小時 customer service window，會自動改用 `WHATSAPP_PROACTIVE_TEMPLATE_NAME`；未配置模板時會阻止發送。
+- WhatsApp webhook 已改為 fail-closed：缺 `WHATSAPP_APP_SECRET` 時拒絕處理 POST webhook。
+- `/admin` 已改為登入頁 + HttpOnly cookie；WhatsApp 管理 API 不再靠 URL query secret。
+- DeepSeek 回覆已加 URL allowlist：只允許候選課程提供的 `reply_url` / `registration_url` / `detail_url`，否則 fallback 到規則式推薦。
 - Meta WhatsApp Manager 已提交 production template `parent_course_reminder`，語言 `Chinese (HKG)`，目前狀態為審查中。
 - Zeabur 已設定 `WHATSAPP_PROACTIVE_TEMPLATE_NAME=parent_course_reminder` 與 `WHATSAPP_PROACTIVE_TEMPLATE_LANGUAGE=zh_HK`，並已重新部署。
 
@@ -61,7 +64,7 @@ python -B -m compileall src
 git diff --check
 ```
 
-最近一次已知測試數量：`60` 個 unittest 通過。
+最近一次已知測試數量：`63` 個 unittest 通過。
 
 2026-05-21 實站爬蟲驗證：
 
@@ -136,6 +139,9 @@ git diff --check
 - Operator-approved proactive draft send endpoint.
 - WhatsApp-side consent capture commands.
 - WhatsApp template payload sending for proactive messages outside the 24-hour window.
+- WhatsApp webhook fail-closed signature enforcement.
+- Admin dashboard login cookie and Authorization Bearer support for admin APIs.
+- DeepSeek URL allowlist fallback.
 - Legacy admin API: `/api/users`, `/api/push`, `/api/cron`.
 
 ### Does not exist yet
@@ -164,7 +170,7 @@ Next useful build:
 2. After approval, send one real outside-window template test from `/admin` or the proactive send API.
 3. Add persistent proactive draft queue/history beyond transcript records.
 4. Add a softer interview phrase that asks consent during onboarding.
-5. Improve `/admin` auth beyond query-string secret before wider use.
+5. Add privacy retention/pruning for old transcripts and LLM cache entries.
 
 Recommended table direction:
 

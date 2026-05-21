@@ -55,11 +55,12 @@ Meta 後台設定：
 | `WHATSAPP_PHONE_NUMBER_ID` | WhatsApp Cloud API phone number id |
 | `WHATSAPP_ACCESS_TOKEN` | Permanent token |
 | `WHATSAPP_VERIFY_TOKEN` | Meta webhook 驗證 token |
-| `WHATSAPP_APP_SECRET` | 推薦，用於驗證 Meta 簽名 |
+| `WHATSAPP_APP_SECRET` | 必填，用於驗證 Meta 簽名；缺少時 webhook 會拒絕處理 |
 | `WHATSAPP_PROACTIVE_TEMPLATE_NAME` | 可選，窗口外主動推送使用的已核准 WhatsApp template 名稱 |
 | `WHATSAPP_PROACTIVE_TEMPLATE_LANGUAGE` | 可選，template 語言，預設 `zh_HK` |
 | `CRON_SECRET` | 保護 `/api/cron` |
-| `ADMIN_SECRET` | 保護 `/api/push` 與 `/api/users` |
+| `ADMIN_SECRET` | 管理台登入密鑰 |
+| `ADMIN_COOKIE_SECURE` | 可選，管理台 cookie 是否只允許 HTTPS，正式環境保持 `true` |
 
 ## API
 
@@ -69,6 +70,8 @@ Meta 後台設定：
 | `GET` | `/health` | 詳細狀態 |
 | `GET` | `/api/whatsapp/webhook` | Meta webhook 驗證 |
 | `POST` | `/api/whatsapp/webhook` | 接收 WhatsApp 消息 |
+| `GET` | `/admin` | WhatsApp 管理台，使用登入 cookie，不再把 secret 放 URL |
+| `POST` | `/admin/login` | 建立 HttpOnly 管理台登入 cookie |
 | `POST` | `/api/cron?secret=...` | Cron 觸發課程抓取 |
 | `POST` | `/api/push?secret=...` | 管理員手動推送 |
 | `GET` | `/api/users?secret=...` | 管理員查看用戶 |

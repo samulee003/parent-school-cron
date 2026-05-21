@@ -702,6 +702,50 @@ class WhatsAppHandler:
         return re.sub(r"https://portal\.dsedj\.gov\.mo[^\s<>]*", repair, text)
 
     @staticmethod
+    def _strip_url_trailing_punctuation(url: str) -> str:
+        trailing_punctuation = "。．，、；;：:！!？?）)]"
+        cleaned = str(url or "").strip()
+        while cleaned and cleaned[-1] in trailing_punctuation:
+            cleaned = cleaned[:-1]
+        return cleaned
+
+    @classmethod
+    def _extract_urls(cls, text: str) -> List[str]:
+        return [
+            cls._strip_url_trailing_punctuation(match.group(0))
+            for match in re.finditer(r"https?://[^\s<>]+", text or "")
+        ]
+
+    @classmethod
+    def _canonical_reply_url(cls, url: str) -> str:
+        cleaned = cls._strip_url_trailing_punctuation(url)
+        if "portal.dsedj.gov.mo" in cleaned:
+            return normalize_course_detail_url(cleaned)
+        return cleaned
+
+    @classmethod
+    def _candidate_url_allowlist(cls, candidate_payload: List[Dict[str, Any]]) -> set[str]:
+        allowed: set[str] = set()
+        for candidate in candidate_payload:
+            for key in ("reply_url", "registration_url", "detail_url"):
+                url = str(candidate.get(key, "") or "")
+                if url:
+                    allowed.add(cls._canonical_reply_url(url))
+        return allowed
+
+    @classmethod
+    def _llm_reply_uses_only_candidate_urls(
+        cls,
+        reply: str,
+        candidate_payload: List[Dict[str, Any]],
+    ) -> bool:
+        urls = cls._extract_urls(reply)
+        if not urls:
+            return True
+        allowed = cls._candidate_url_allowlist(candidate_payload)
+        return all(cls._canonical_reply_url(url) in allowed for url in urls)
+
+    @staticmethod
     def _is_all_courses_request(text: str) -> bool:
         normalized = text.strip().lower().replace(" ", "")
         return normalized in ALL_COURSE_KEYWORDS
@@ -1469,6 +1513,15 @@ class WhatsAppHandler:
             reply = self._call_deepseek(messages)
             if reply:
                 reply = self._repair_reply_links(reply)
+                if not self._llm_reply_uses_only_candidate_urls(reply, candidate_payload):
+                    logger.warning("DeepSeek 回覆包含非候選課程連結，改用規則式推薦")
+                    self._memory.add_agent_flag(
+                        from_number,
+                        "uncertain",
+                        "DeepSeek 回覆包含非候選課程連結，已改用規則式推薦",
+                        {"candidate_count": len(candidate_payload)},
+                    )
+                    return None
                 self._memory.save_llm_cached_response(cache_key, reply)
             return reply
         except Exception as e:

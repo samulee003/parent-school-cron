@@ -122,6 +122,15 @@ class WhatsAppHandlerTests(unittest.TestCase):
         handler._send_text = lambda to, text: sent.append((to, text)) or True
         return handler, sent
 
+    def admin_request(self, secret="admin-secret", cookie=""):
+        headers = {}
+        cookies = {}
+        if secret:
+            headers["authorization"] = f"Bearer {secret}"
+        if cookie:
+            cookies["parent_school_admin"] = cookie
+        return FakeRequest(b"{}", headers, cookies)
+
     def test_courses_keyword_without_profile_asks_for_context(self):
         handler, sent = self.make_handler()
 
@@ -862,12 +871,49 @@ class WhatsAppHandlerTests(unittest.TestCase):
         user_payload = json.loads(payload["messages"][1]["content"])
         self.assertIn("detail_url", user_payload["候選課程"][0])
 
-    def test_deepseek_reply_repairs_dsedj_registered_symbol_link(self):
+    def test_deepseek_reply_with_unapproved_url_falls_back_to_rule_based(self):
         handler, sent = self.make_handler()
+
+        with patch.dict(os.environ, {"DEEPSEEK_API_KEY": "test-key"}, clear=False):
+            with patch("whatsapp_handler.requests.post") as post:
+                post.return_value.status_code = 200
+                post.return_value.json.return_value = {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": "推薦不存在的課程，報名連結：https://evil.example/register"
+                            }
+                        }
+                    ]
+                }
+
+                handler._handle_text_message("85360000000", "小朋友1歲，想親子活動")
+
+        self.assertNotIn("evil.example", sent[0][1])
+        self.assertIn("嬰幼繪本氹氹轉", sent[0][1])
+        self.assertIn("https://example.test/course/c1", sent[0][1])
+
+    def test_deepseek_reply_repairs_dsedj_registered_symbol_link(self):
         broken_link = (
             "https://portal.dsedj.gov.mo/webdsejspace/addon/allmain/msgfunc/"
             "Msg_funclink_parentacademy_page.jsp?msg_id=713092®status=報名中&langsel=C"
         )
+        handler = WhatsAppHandler()
+        handler._get_bot = lambda: type("Bot", (), {"crawler": FakeCrawler([
+            Course(
+                id="713092",
+                name="健康情緒與青少年同行",
+                date="2026/05/31 星期日 10:30-12:00",
+                date_parsed=None,
+                age_group="0-2歲",
+                topic="家庭關係",
+                target="親子",
+                status="報名中",
+                detail_url=broken_link,
+            )
+        ])})()
+        sent = []
+        handler._send_text = lambda to, text: sent.append((to, text)) or True
 
         with patch.dict(os.environ, {"DEEPSEEK_API_KEY": "test-key"}, clear=False):
             with patch("whatsapp_handler.requests.post") as post:
@@ -913,6 +959,21 @@ class WhatsAppHandlerTests(unittest.TestCase):
             else:
                 os.environ["WHATSAPP_APP_SECRET"] = old_secret
 
+    def test_whatsapp_webhook_requires_meta_secret_configuration(self):
+        body = b'{"object":"whatsapp_business_account","entry":[]}'
+        request = FakeRequest(body, {})
+        old_secret = os.environ.get("WHATSAPP_APP_SECRET")
+        os.environ.pop("WHATSAPP_APP_SECRET", None)
+        try:
+            with self.assertRaises(HTTPException) as ctx:
+                asyncio.run(api_server.whatsapp_webhook(request, api_server.BackgroundTasks()))
+            self.assertEqual(ctx.exception.status_code, 500)
+        finally:
+            if old_secret is None:
+                os.environ.pop("WHATSAPP_APP_SECRET", None)
+            else:
+                os.environ["WHATSAPP_APP_SECRET"] = old_secret
+
     def test_whatsapp_webhook_schedules_processing_in_background(self):
         payload = {
             "entry": [
@@ -934,7 +995,10 @@ class WhatsAppHandlerTests(unittest.TestCase):
                 }
             ]
         }
-        request = FakeRequest(json.dumps(payload).encode("utf-8"), {})
+        body = json.dumps(payload).encode("utf-8")
+        secret = "app-secret"
+        digest = hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
+        request = FakeRequest(body, {"x-hub-signature-256": f"sha256={digest}"})
 
         class FakeWhatsAppHandler:
             def __init__(self):
@@ -953,7 +1017,7 @@ class WhatsAppHandlerTests(unittest.TestCase):
         fake_handler = FakeWhatsAppHandler()
         old_get_wa_handler = api_server.get_wa_handler
         old_secret = os.environ.get("WHATSAPP_APP_SECRET")
-        os.environ.pop("WHATSAPP_APP_SECRET", None)
+        os.environ["WHATSAPP_APP_SECRET"] = secret
         api_server.get_wa_handler = lambda: fake_handler
         background_tasks = api_server.BackgroundTasks()
         try:
@@ -1019,11 +1083,15 @@ class WhatsAppHandlerTests(unittest.TestCase):
         api_server.wa_handler = handler
         api_server.wa_memory = handler._memory
         try:
-            listing = asyncio.run(api_server.api_whatsapp_conversations(secret="admin-secret"))
+            request = self.admin_request()
+            listing = asyncio.run(api_server.api_whatsapp_conversations(request=request))
             self.assertEqual(listing["total"], 1)
             self.assertEqual(listing["conversations"][0]["phone"], "85360000000")
 
-            detail = asyncio.run(api_server.api_whatsapp_conversation("85360000000", secret="admin-secret"))
+            detail = asyncio.run(api_server.api_whatsapp_conversation(
+                "85360000000",
+                request=request,
+            ))
             self.assertEqual(len(detail["messages"]), 2)
             self.assertEqual(detail["conversation"]["status"], "ai")
 
@@ -1035,27 +1103,63 @@ class WhatsAppHandlerTests(unittest.TestCase):
                     consent_status="allowed",
                     proactive_notes="可以推送青少年情緒課程",
                 ),
-                secret="admin-secret",
+                request=request,
             ))
             self.assertIn("高關注", updated["conversation"]["tags"])
             self.assertEqual(updated["conversation"]["notes"], "需要留意青少年情緒")
             self.assertEqual(updated["conversation"]["consent_status"], "allowed")
             self.assertEqual(updated["conversation"]["proactive_notes"], "可以推送青少年情緒課程")
 
-            takeover = asyncio.run(api_server.api_whatsapp_takeover("85360000000", secret="admin-secret"))
+            takeover = asyncio.run(api_server.api_whatsapp_takeover(
+                "85360000000",
+                request=request,
+            ))
             self.assertEqual(takeover["conversation"]["status"], "human")
 
             asyncio.run(api_server.api_whatsapp_admin_message(
                 "85360000000",
                 api_server.AdminMessageRequest(body="我人工接手看看。"),
-                secret="admin-secret",
+                request=request,
             ))
             self.assertIn("我人工接手看看。", sent[-1][1])
             messages = handler._memory.get_messages("85360000000")
             self.assertEqual(messages[-1]["source"], "admin")
 
-            resumed = asyncio.run(api_server.api_whatsapp_resume_ai("85360000000", secret="admin-secret"))
+            resumed = asyncio.run(api_server.api_whatsapp_resume_ai(
+                "85360000000",
+                request=request,
+            ))
             self.assertEqual(resumed["conversation"]["status"], "ai")
+        finally:
+            api_server.wa_handler = old_handler
+            api_server.wa_memory = old_memory
+            if old_admin is None:
+                os.environ.pop("ADMIN_SECRET", None)
+            else:
+                os.environ["ADMIN_SECRET"] = old_admin
+
+    def test_whatsapp_admin_rejects_wrong_cookie_and_accepts_valid_cookie(self):
+        handler, _ = self.make_handler()
+        handler._handle_text_message("85360000000", "課程")
+
+        old_admin = os.environ.get("ADMIN_SECRET")
+        old_handler = api_server.wa_handler
+        old_memory = api_server.wa_memory
+        os.environ["ADMIN_SECRET"] = "admin-secret"
+        api_server.wa_handler = handler
+        api_server.wa_memory = handler._memory
+        try:
+            with self.assertRaises(HTTPException) as ctx:
+                asyncio.run(api_server.api_whatsapp_conversations(
+                    request=self.admin_request(secret="", cookie="wrong-cookie"),
+                ))
+            self.assertEqual(ctx.exception.status_code, 401)
+
+            valid_cookie = api_server.make_admin_session_token("admin-secret")
+            listing = asyncio.run(api_server.api_whatsapp_conversations(
+                request=self.admin_request(secret="", cookie=valid_cookie),
+            ))
+            self.assertEqual(listing["total"], 1)
         finally:
             api_server.wa_handler = old_handler
             api_server.wa_memory = old_memory
@@ -1092,13 +1196,17 @@ class WhatsAppHandlerTests(unittest.TestCase):
         api_server.wa_handler = handler
         api_server.wa_memory = handler._memory
         try:
-            flags = asyncio.run(api_server.api_whatsapp_flags(secret="admin-secret"))
+            request = self.admin_request()
+            flags = asyncio.run(api_server.api_whatsapp_flags(request=request))
             self.assertGreaterEqual(flags["total"], 1)
 
-            resolved = asyncio.run(api_server.api_whatsapp_resolve_flag(flag_id, secret="admin-secret"))
+            resolved = asyncio.run(api_server.api_whatsapp_resolve_flag(
+                flag_id,
+                request=request,
+            ))
             self.assertTrue(resolved["success"])
 
-            matches = asyncio.run(api_server.api_whatsapp_proactive_matches(secret="admin-secret"))
+            matches = asyncio.run(api_server.api_whatsapp_proactive_matches(request=request))
             self.assertEqual(matches["total"], 1)
             self.assertEqual(matches["matches"][0]["matches"][0]["course"]["name"], "健康情緒與青少年同行")
             self.assertIn("孩子年齡吻合", matches["matches"][0]["matches"][0]["reasons"])
@@ -1156,7 +1264,7 @@ class WhatsAppHandlerTests(unittest.TestCase):
                 asyncio.run(api_server.api_whatsapp_send_proactive_match(
                     "85360000000",
                     api_server.ProactiveSendRequest(body="這是主動推送草稿"),
-                    secret="admin-secret",
+                    request=self.admin_request(),
                 ))
             self.assertEqual(ctx.exception.status_code, 409)
 
@@ -1164,7 +1272,7 @@ class WhatsAppHandlerTests(unittest.TestCase):
             result = asyncio.run(api_server.api_whatsapp_send_proactive_match(
                 "85360000000",
                 api_server.ProactiveSendRequest(body="這是主動推送草稿"),
-                secret="admin-secret",
+                request=self.admin_request(),
             ))
 
             self.assertTrue(result["success"])
@@ -1246,7 +1354,7 @@ class WhatsAppHandlerTests(unittest.TestCase):
                 asyncio.run(api_server.api_whatsapp_send_proactive_match(
                     "85360000000",
                     api_server.ProactiveSendRequest(body="主動推送草稿"),
-                    secret="admin-secret",
+                    request=self.admin_request(),
                 ))
             self.assertEqual(ctx.exception.status_code, 409)
             self.assertEqual(sent, [])
@@ -1261,7 +1369,7 @@ class WhatsAppHandlerTests(unittest.TestCase):
             result = asyncio.run(api_server.api_whatsapp_send_proactive_match(
                 "85360000000",
                 api_server.ProactiveSendRequest(body="主動推送草稿"),
-                secret="admin-secret",
+                request=self.admin_request(),
             ))
 
             self.assertTrue(result["success"])
@@ -1297,9 +1405,10 @@ class WhatsAppHandlerTests(unittest.TestCase):
 
 
 class FakeRequest:
-    def __init__(self, body: bytes, headers: dict):
+    def __init__(self, body: bytes, headers: dict, cookies: dict | None = None):
         self._body = body
         self.headers = headers
+        self.cookies = cookies or {}
 
     async def body(self):
         return self._body

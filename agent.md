@@ -133,6 +133,8 @@ When deploying:
 - Do not print secret values while updating Zeabur variables.
 - Restart the service after changing WhatsApp or DeepSeek variables.
 - Check `/health`.
+- WhatsApp POST webhook is fail-closed: `WHATSAPP_APP_SECRET` must be configured
+  or incoming webhook events are rejected.
 - Check Meta webhook verification only with the configured verify token, without exposing it.
 - If webhook receives but user sees no reply, check Cloud API registration, app subscription to `messages`, and access-token permissions.
 
@@ -217,7 +219,8 @@ The major product direction is not more WhatsApp commands. It is a real operator
 
 Already started:
 
-- `/admin` dashboard protected by `ADMIN_SECRET` or stronger auth.
+- `/admin` dashboard protected by `ADMIN_SECRET` login and an HttpOnly session
+  cookie; do not put admin secrets in URLs.
 - Parent list with phone, latest message, known memory, and status.
 - Full inbound/outbound message transcript.
 - Human takeover / resume AI switch.
@@ -246,6 +249,8 @@ Tests should cover:
 - Off-topic messages do not call DeepSeek.
 - `更多` works after a restart via persisted last query.
 - DeepSeek cache avoids duplicate calls.
+- DeepSeek replies that contain URLs outside the candidate course allowlist fall
+  back to deterministic recommendations.
 - DeepSeek quota fallback still returns useful courses.
 - Webhook duplicate message ids are processed once.
 - Admin endpoints require auth.
