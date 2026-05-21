@@ -61,6 +61,11 @@ OFF_TOPIC_KEYWORDS = (
     "醫生", "医生", "診所", "诊所", "藥", "药", "感冒", "python",
     "javascript", "寫code", "写code", "寫程式", "写程序",
 )
+OUT_OF_SCOPE_AI_KEYWORDS = (
+    "chatgpt", "openai", "deepseek", "claude", "生成式ai", "生成式 ai",
+    "人工智能", "ai工具", "ai 工具", "大模型", "論文", "论文",
+)
+LONG_MESSAGE_OFF_TOPIC_CHARS = 120
 
 
 def get_phone_number_id() -> str:
@@ -267,6 +272,19 @@ class WhatsAppHandler:
             logger.exception(f"發送消息異常: {e}")
             return False
 
+    def _reply(self, to: str, text: str, source: str = "ai") -> bool:
+        sent = self._send_text(to, text)
+        if sent:
+            self._memory.record_message(to, "outbound", source, text)
+        return sent
+
+    def send_admin_message(self, to: str, text: str) -> bool:
+        """Send an operator-authored WhatsApp message and keep the transcript."""
+        message = text.strip()
+        if not message:
+            return False
+        return self._reply(to, message, source="admin")
+
     @staticmethod
     def _course_value(course: Any, attr: str, fallback: str = "") -> str:
         """同時支援 Course dataclass 與 dict，避免來源轉換時炸掉。"""
@@ -328,11 +346,57 @@ class WhatsAppHandler:
         return any(k in text_lower for k in OFF_TOPIC_KEYWORDS)
 
     @staticmethod
+    def _has_course_signal(text: str) -> bool:
+        normalized = WhatsAppHandler._normalize_command(text)
+        if not normalized:
+            return False
+        if (
+            normalized in RESET_KEYWORDS
+            or normalized in PROFILE_KEYWORDS
+            or normalized in NEXT_PAGE_KEYWORDS
+            or normalized in ALL_COURSE_KEYWORDS
+            or normalized in BARE_RECOMMENDATION_COMMANDS
+            or WhatsAppHandler._parse_detail_request(text) is not None
+        ):
+            return True
+        if detect_age_groups(text):
+            return True
+        if any(target in text for target in TARGETS):
+            return True
+        if any(topic in text for topic in TOPICS):
+            return True
+        if any(k in text.strip().lower() for k in ["報名", "报名", "課程", "课程", "家長學堂", "家长学堂"]):
+            return True
+        return WhatsAppHandler._is_course_intent(text)
+
+    @staticmethod
+    def _is_out_of_scope_request(text: str) -> bool:
+        text_stripped = text.strip()
+        if not text_stripped or WhatsAppHandler._has_course_signal(text_stripped):
+            return False
+
+        text_lower = text_stripped.lower()
+        if any(k in text_lower for k in OUT_OF_SCOPE_AI_KEYWORDS):
+            return True
+        return len(text_stripped) >= LONG_MESSAGE_OFF_TOPIC_CHARS
+
+    @staticmethod
     def _off_topic_text() -> str:
         return (
             "我目前只協助查詢和推薦 *澳門家長學堂課程*，"
             "不會回答餐廳、天氣、投資、功課或其他無關問題。\n\n"
             "你可以回覆：*小朋友13歲，想家長課*、*青少年課程*、*更多*。"
+        )
+
+    @staticmethod
+    def _unknown_text() -> str:
+        return (
+            "🤔 這句我未能轉成課程條件。\n\n"
+            "我只處理 *澳門家長學堂課程* 查詢。你可以直接發：\n"
+            "• *小朋友1歲，想親子活動*\n"
+            "• *青少年家長課*\n"
+            "• *全部課程*\n"
+            "• *更多*"
         )
 
     @staticmethod
@@ -927,13 +991,18 @@ class WhatsAppHandler:
         text_lower = text.strip().lower()
         normalized = self._normalize_command(text)
         logger.info(f"收到消息 from={from_number}: {text}")
+        self._memory.record_message(from_number, "inbound", "parent", text)
+
+        if self._memory.is_human_takeover(from_number):
+            logger.info("AI 已暫停，自動略過 from=%s", from_number)
+            return
 
         # 關鍵詞匹配
         if normalized in RESET_KEYWORDS:
             self._profiles.pop(from_number, None)
             self._last_queries.pop(from_number, None)
             self._memory.clear_user(from_number)
-            self._send_text(from_number, "已重設。你可以回覆：*小朋友幾歲，想找哪類課程*。")
+            self._reply(from_number, "已重設。你可以回覆：*小朋友幾歲，想找哪類課程*。")
             return
 
         if normalized in PROFILE_KEYWORDS:
@@ -943,11 +1012,11 @@ class WhatsAppHandler:
                 f"{self._profile_text(profile)}\n\n"
                 "你可以直接補充，例如：*不要親子，要家長課*、*只要青少年*、*想身心健康*。"
             )
-            self._send_text(from_number, reply)
+            self._reply(from_number, reply)
             return
 
-        if self._is_off_topic_request(text):
-            self._send_text(from_number, self._off_topic_text())
+        if self._is_off_topic_request(text) or self._is_out_of_scope_request(text):
+            self._reply(from_number, self._off_topic_text())
             return
 
         profile = self._update_profile_from_text(from_number, text)
@@ -967,7 +1036,7 @@ class WhatsAppHandler:
                     self._last_queries[from_number] = persisted_query
                 else:
                     reply = self._get_agentic_recommendation_text(from_number, profile, text)
-                    self._send_text(from_number, reply)
+                    self._reply(from_number, reply)
                     return
             query = self._last_queries[from_number]
             if page_request == -1:
@@ -1006,16 +1075,9 @@ class WhatsAppHandler:
                 "有什麼可以幫你的嗎？"
             )
         else:
-            reply = (
-                "🤔 我不太明白你的意思。\n\n"
-                "試試發送：\n"
-                "• *小朋友1歲，想親子活動* — 我幫你推薦\n"
-                "• *幫我揀* — 按已知偏好推薦\n"
-                "• *全部課程* — 看精簡列表\n"
-                "• *重設* — 重新設定偏好"
-            )
+            reply = self._unknown_text()
 
-        self._send_text(from_number, reply)
+        self._reply(from_number, reply)
 
     @staticmethod
     def _iter_webhook_messages(data: dict):
@@ -1066,7 +1128,7 @@ class WhatsAppHandler:
             else:
                 # 非文字消息（圖片、語音等），回覆提示
                 if from_number:
-                    self._send_text(
+                    self._reply(
                         from_number,
                         "抱歉，我目前只支援文字消息查詢課程。\n請發送 *課程* 查看最新課程資訊。"
                     )

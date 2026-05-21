@@ -31,8 +31,8 @@
 | File | Purpose |
 | --- | --- |
 | `src/api_server.py` | FastAPI 入口、健康檢查、WhatsApp webhook、管理 API |
-| `src/whatsapp_handler.py` | WhatsApp 對話邏輯、課程推薦、DeepSeek guardrail、分頁 |
-| `src/whatsapp_memory.py` | SQLite 記憶、去重、LLM 使用量、LLM 快取 |
+| `src/whatsapp_handler.py` | WhatsApp 對話邏輯、課程推薦、DeepSeek guardrail、分頁、人工回覆 |
+| `src/whatsapp_memory.py` | SQLite 記憶、對話紀錄、接手狀態、去重、LLM 使用量、LLM 快取 |
 | `src/scraper.py` | DSEDJ 家長學堂課程抓取與解析 |
 | `tests/test_whatsapp_handler.py` | WhatsApp 對話、DeepSeek 成本守門、webhook 測試 |
 | `tests/test_scraper_classifier.py` | 爬蟲與分類測試 |
@@ -168,6 +168,9 @@ Supported memory:
 - `processed_whatsapp_messages`: webhook duplicate protection.
 - `llm_daily_usage`: per-user and global DeepSeek limits.
 - `llm_response_cache`: cost-saving cache for identical recommendation contexts.
+- `whatsapp_conversations`: parent conversation status, latest activity, notes/tags placeholders.
+- `whatsapp_messages`: inbound/outbound transcript for parent, AI, admin, and system messages.
+- `whatsapp_agent_flags`: placeholder table for no-match/uncertain/handoff flags.
 
 ## DeepSeek Guardrail
 
@@ -177,6 +180,7 @@ Before calling DeepSeek:
 
 - First check if the message is in the course domain.
 - Reject off-topic questions locally.
+- Reject long/noisy non-course messages locally before profile update or LLM calls.
 - Extract age and preference with deterministic rules.
 - Fetch candidate courses from DSEDJ.
 - Pass only candidate course data to DeepSeek.
@@ -187,13 +191,18 @@ If DeepSeek fails, times out, exceeds quota, or is disabled, fall back to rule-b
 
 ## Agentic Admin Direction
 
-The next major product step is not more WhatsApp commands. It is a real operator interface:
+The major product direction is not more WhatsApp commands. It is a real operator interface and proactive matching loop.
+
+Already started:
 
 - `/admin` dashboard protected by `ADMIN_SECRET` or stronger auth.
 - Parent list with phone, latest message, known memory, and status.
 - Full inbound/outbound message transcript.
 - Human takeover / resume AI switch.
 - Manual reply from dashboard through WhatsApp Cloud API.
+
+Next:
+
 - Notes/tags per parent.
 - AI uncertainty or no-match flag.
 - Proactive matching: new course -> match parent memories -> draft/push if allowed by WhatsApp rules.
@@ -210,8 +219,9 @@ Tests should cover:
 - DeepSeek quota fallback still returns useful courses.
 - Webhook duplicate message ids are processed once.
 - Admin endpoints require auth.
-- Human takeover suppresses AI auto-reply once implemented.
-- Manual admin reply records outbound messages once implemented.
+- Human takeover suppresses AI auto-reply.
+- Manual admin reply records outbound messages.
+- Long non-course messages do not call DeepSeek or update parent profile.
 
 ## Working Style
 

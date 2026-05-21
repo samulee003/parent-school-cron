@@ -548,6 +548,48 @@ class WhatsAppHandlerTests(unittest.TestCase):
         self.assertFalse(post.called)
         self.assertIn("澳門家長學堂課程", sent[1][1])
 
+    def test_long_unrelated_message_is_stopped_locally(self):
+        handler, sent = self.make_handler()
+        long_message = (
+            "你的 ChatGPT 只是工具嗎？科學證實我們正跟 AI 建立依附關係。"
+            "這段文字很長，想請你評論人工智能和心理學文章，重點是情感依附和人機互動。"
+        )
+
+        with patch.dict(os.environ, {"DEEPSEEK_API_KEY": "test-key"}, clear=False):
+            with patch("whatsapp_handler.requests.post") as post:
+                handler._handle_text_message("85360000000", long_message)
+
+        self.assertFalse(post.called)
+        self.assertIn("只協助查詢和推薦", sent[0][1])
+        self.assertEqual(handler._load_profile("85360000000"), {})
+
+    def test_transcript_records_parent_and_ai_messages(self):
+        handler, sent = self.make_handler()
+
+        handler._handle_text_message("85360000000", "課程")
+
+        self.assertEqual(len(sent), 1)
+        messages = handler._memory.get_messages("85360000000")
+        self.assertEqual([m["direction"] for m in messages], ["inbound", "outbound"])
+        self.assertEqual([m["source"] for m in messages], ["parent", "ai"])
+        self.assertEqual(messages[0]["body"], "課程")
+        self.assertIn("我先幫你縮窄", messages[1]["body"])
+        conversations = handler._memory.list_conversations()
+        self.assertEqual(conversations[0]["phone"], "85360000000")
+        self.assertEqual(conversations[0]["status"], "ai")
+
+    def test_human_takeover_suppresses_ai_auto_reply(self):
+        handler, sent = self.make_handler()
+        handler._memory.set_conversation_status("85360000000", "human")
+
+        handler._handle_text_message("85360000000", "小朋友1歲，想親子活動")
+
+        self.assertEqual(sent, [])
+        messages = handler._memory.get_messages("85360000000")
+        self.assertEqual(len(messages), 1)
+        self.assertEqual(messages[0]["direction"], "inbound")
+        self.assertEqual(messages[0]["source"], "parent")
+
     def test_duplicate_whatsapp_message_id_is_processed_once(self):
         handler, sent = self.make_handler()
         payload = {
@@ -814,6 +856,47 @@ class WhatsAppHandlerTests(unittest.TestCase):
             else:
                 os.environ["CRON_SECRET"] = old_cron
             if old_admin is not None:
+                os.environ["ADMIN_SECRET"] = old_admin
+
+    def test_whatsapp_admin_conversation_endpoints(self):
+        handler, sent = self.make_handler()
+        handler._handle_text_message("85360000000", "課程")
+
+        old_admin = os.environ.get("ADMIN_SECRET")
+        old_handler = api_server.wa_handler
+        old_memory = api_server.wa_memory
+        os.environ["ADMIN_SECRET"] = "admin-secret"
+        api_server.wa_handler = handler
+        api_server.wa_memory = handler._memory
+        try:
+            listing = asyncio.run(api_server.api_whatsapp_conversations(secret="admin-secret"))
+            self.assertEqual(listing["total"], 1)
+            self.assertEqual(listing["conversations"][0]["phone"], "85360000000")
+
+            detail = asyncio.run(api_server.api_whatsapp_conversation("85360000000", secret="admin-secret"))
+            self.assertEqual(len(detail["messages"]), 2)
+            self.assertEqual(detail["conversation"]["status"], "ai")
+
+            takeover = asyncio.run(api_server.api_whatsapp_takeover("85360000000", secret="admin-secret"))
+            self.assertEqual(takeover["conversation"]["status"], "human")
+
+            asyncio.run(api_server.api_whatsapp_admin_message(
+                "85360000000",
+                api_server.AdminMessageRequest(body="我人工接手看看。"),
+                secret="admin-secret",
+            ))
+            self.assertIn("我人工接手看看。", sent[-1][1])
+            messages = handler._memory.get_messages("85360000000")
+            self.assertEqual(messages[-1]["source"], "admin")
+
+            resumed = asyncio.run(api_server.api_whatsapp_resume_ai("85360000000", secret="admin-secret"))
+            self.assertEqual(resumed["conversation"]["status"], "ai")
+        finally:
+            api_server.wa_handler = old_handler
+            api_server.wa_memory = old_memory
+            if old_admin is None:
+                os.environ.pop("ADMIN_SECRET", None)
+            else:
                 os.environ["ADMIN_SECRET"] = old_admin
 
     def test_root_reports_whatsapp_first_version(self):

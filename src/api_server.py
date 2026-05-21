@@ -24,6 +24,7 @@ from wecom_cs_handler import CSMessageHandler
 from wecom_crypto import WeComCrypto
 from wecom_poller import WeComPoller
 from whatsapp_handler import WhatsAppHandler, is_configured as wa_is_configured, is_valid_meta_signature
+from whatsapp_memory import WhatsAppMemoryStore
 
 # 全局實例
 bot: Optional[ZeaburBot] = None
@@ -31,6 +32,7 @@ cs_handler: Optional[CSMessageHandler] = None
 cs_crypto: Optional[WeComCrypto] = None
 poller: Optional[WeComPoller] = None
 wa_handler: Optional[WhatsAppHandler] = None
+wa_memory: Optional[WhatsAppMemoryStore] = None
 
 
 def get_bot() -> ZeaburBot:
@@ -74,6 +76,16 @@ def get_wa_handler() -> Optional[WhatsAppHandler]:
     return wa_handler
 
 
+def get_wa_memory_store() -> WhatsAppMemoryStore:
+    """Shared WhatsApp memory store for admin views."""
+    global wa_memory
+    if wa_handler is not None:
+        return wa_handler._memory
+    if wa_memory is None:
+        wa_memory = WhatsAppMemoryStore()
+    return wa_memory
+
+
 def require_secret(provided: str, env_keys: tuple[str, ...], label: str) -> None:
     """檢查管理/排程接口密鑰。"""
     expected = ""
@@ -113,6 +125,10 @@ class StatusResponse(BaseModel):
     users: int
     configured: int
     uptime: str
+
+
+class AdminMessageRequest(BaseModel):
+    body: str
 
 
 # ============== FastAPI 應用 ==============
@@ -320,6 +336,213 @@ async def api_users(secret: str = ""):
             for u in users
         ],
     }
+
+
+# ============== WhatsApp Agentic Admin ==============
+
+@app.get("/admin", response_class=HTMLResponse)
+async def admin_dashboard(secret: str = ""):
+    """Minimal WhatsApp operator console."""
+    require_secret(secret, ("ADMIN_SECRET",), "Admin")
+    return """<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>WhatsApp 家長學堂接手台</title>
+  <style>
+    :root { color-scheme: light; --line: #d9ded7; --ink: #1f2933; --muted: #5f6f79; --brand: #0f8f5f; --bg: #f6f7f4; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: var(--ink); background: var(--bg); }
+    header { height: 52px; display: flex; align-items: center; justify-content: space-between; padding: 0 18px; border-bottom: 1px solid var(--line); background: #fff; }
+    h1 { font-size: 18px; margin: 0; font-weight: 700; }
+    main { display: grid; grid-template-columns: 300px minmax(360px, 1fr) 280px; min-height: calc(100vh - 52px); }
+    aside, section { border-right: 1px solid var(--line); background: #fff; min-width: 0; }
+    aside:last-child { border-right: 0; }
+    .toolbar { padding: 12px; border-bottom: 1px solid var(--line); display: flex; gap: 8px; align-items: center; }
+    input, textarea, button { font: inherit; }
+    input, textarea { width: 100%; border: 1px solid var(--line); border-radius: 6px; padding: 9px 10px; background: #fff; }
+    textarea { min-height: 88px; resize: vertical; }
+    button { border: 1px solid var(--line); background: #fff; border-radius: 6px; padding: 8px 10px; cursor: pointer; white-space: nowrap; }
+    button.primary { background: var(--brand); color: #fff; border-color: var(--brand); }
+    button.warn { border-color: #b7791f; color: #8a5200; }
+    .list { overflow: auto; max-height: calc(100vh - 105px); }
+    .row { padding: 12px; border-bottom: 1px solid var(--line); cursor: pointer; }
+    .row:hover, .row.active { background: #eef7f1; }
+    .phone { font-weight: 700; font-size: 14px; }
+    .latest { color: var(--muted); font-size: 13px; margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .pill { display: inline-block; font-size: 12px; border: 1px solid var(--line); border-radius: 999px; padding: 2px 8px; color: var(--muted); margin-top: 6px; }
+    .pill.human { color: #8a5200; border-color: #d69e2e; background: #fffaf0; }
+    .messages { padding: 16px; overflow: auto; height: calc(100vh - 210px); display: flex; flex-direction: column; gap: 10px; }
+    .bubble { max-width: 78%; padding: 10px 12px; border-radius: 8px; line-height: 1.45; white-space: pre-wrap; word-break: break-word; border: 1px solid var(--line); }
+    .inbound { align-self: flex-start; background: #fff; }
+    .outbound { align-self: flex-end; background: #e8f7ee; border-color: #bddfc8; }
+    .meta { color: var(--muted); font-size: 12px; margin-bottom: 4px; }
+    .composer { padding: 12px; border-top: 1px solid var(--line); background: #fff; display: grid; grid-template-columns: 1fr auto; gap: 8px; }
+    .sidebody { padding: 14px; display: grid; gap: 12px; }
+    .kv { border-bottom: 1px solid var(--line); padding-bottom: 10px; }
+    .label { color: var(--muted); font-size: 12px; margin-bottom: 4px; }
+    pre { margin: 0; white-space: pre-wrap; word-break: break-word; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; background: #f4f5f2; padding: 10px; border-radius: 6px; }
+    @media (max-width: 900px) { main { grid-template-columns: 1fr; } aside, section { min-height: 260px; border-right: 0; border-bottom: 1px solid var(--line); } .messages { height: 360px; } }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>WhatsApp 家長學堂接手台</h1>
+    <button onclick="loadConversations()">刷新</button>
+  </header>
+  <main>
+    <aside>
+      <div class="toolbar"><input id="search" placeholder="搜尋電話或訊息" oninput="renderList()"></div>
+      <div id="list" class="list"></div>
+    </aside>
+    <section>
+      <div class="toolbar"><strong id="chatTitle">未選擇對話</strong></div>
+      <div id="messages" class="messages"></div>
+      <div class="composer">
+        <textarea id="reply" placeholder="人工回覆"></textarea>
+        <button class="primary" onclick="sendReply()">傳送</button>
+      </div>
+    </section>
+    <aside>
+      <div class="sidebody">
+        <div class="kv"><div class="label">狀態</div><div id="status">-</div></div>
+        <div style="display:flex; gap:8px; flex-wrap:wrap">
+          <button class="warn" onclick="takeover()">人工接手</button>
+          <button onclick="resumeAi()">恢復 AI</button>
+        </div>
+        <div class="kv"><div class="label">記憶</div><pre id="profile">{}</pre></div>
+        <div class="kv"><div class="label">上次查詢</div><pre id="lastQuery">{}</pre></div>
+      </div>
+    </aside>
+  </main>
+  <script>
+    const secret = new URLSearchParams(location.search).get("secret") || "";
+    let conversations = [];
+    let currentPhone = "";
+
+    async function api(path, options = {}) {
+      const sep = path.includes("?") ? "&" : "?";
+      const res = await fetch(path + sep + "secret=" + encodeURIComponent(secret), {
+        headers: {"Content-Type": "application/json"},
+        ...options
+      });
+      if (!res.ok) throw new Error(await res.text());
+      return res.json();
+    }
+    function esc(text) {
+      const map = {"&":"&amp;","<":"&lt;",">":"&gt;"};
+      map['"'] = "&quot;";
+      map["'"] = "&#39;";
+      return String(text || "").replace(/[&<>"']/g, c => map[c]);
+    }
+    async function loadConversations() {
+      const data = await api("/api/whatsapp/conversations");
+      conversations = data.conversations || [];
+      renderList();
+      if (currentPhone) await openChat(currentPhone);
+    }
+    function renderList() {
+      const q = document.getElementById("search").value.trim().toLowerCase();
+      document.getElementById("list").innerHTML = conversations
+        .filter(c => !q || c.phone.includes(q) || String(c.latest_message || "").toLowerCase().includes(q))
+        .map(c => `<div class="row ${c.phone === currentPhone ? "active" : ""}" onclick="openChat('${esc(c.phone)}')">
+          <div class="phone">${esc(c.phone)}</div>
+          <div class="latest">${esc(c.latest_message || "")}</div>
+          <span class="pill ${c.status === "human" ? "human" : ""}">${c.status === "human" ? "人工接手" : "AI 自動"}</span>
+        </div>`).join("");
+    }
+    async function openChat(phone) {
+      currentPhone = phone;
+      const data = await api("/api/whatsapp/conversations/" + encodeURIComponent(phone));
+      document.getElementById("chatTitle").textContent = phone;
+      document.getElementById("status").textContent = data.conversation.status === "human" ? "人工接手中" : "AI 自動回覆";
+      document.getElementById("profile").textContent = JSON.stringify(data.profile || {}, null, 2);
+      document.getElementById("lastQuery").textContent = JSON.stringify(data.last_query || {}, null, 2);
+      document.getElementById("messages").innerHTML = (data.messages || []).map(m => `
+        <div class="bubble ${m.direction}">
+          <div class="meta">${esc(m.source)} · ${esc(m.created_at)}</div>${esc(m.body)}
+        </div>`).join("");
+      renderList();
+    }
+    async function takeover() {
+      if (!currentPhone) return;
+      await api("/api/whatsapp/conversations/" + encodeURIComponent(currentPhone) + "/takeover", {method: "POST"});
+      await loadConversations();
+    }
+    async function resumeAi() {
+      if (!currentPhone) return;
+      await api("/api/whatsapp/conversations/" + encodeURIComponent(currentPhone) + "/resume-ai", {method: "POST"});
+      await loadConversations();
+    }
+    async function sendReply() {
+      const body = document.getElementById("reply").value.trim();
+      if (!currentPhone || !body) return;
+      await api("/api/whatsapp/conversations/" + encodeURIComponent(currentPhone) + "/messages", {
+        method: "POST",
+        body: JSON.stringify({body})
+      });
+      document.getElementById("reply").value = "";
+      await loadConversations();
+    }
+    loadConversations().catch(err => alert(err.message));
+  </script>
+</body>
+</html>"""
+
+
+@app.get("/api/whatsapp/conversations")
+async def api_whatsapp_conversations(secret: str = "", limit: int = 50):
+    """List WhatsApp parent conversations for the admin console."""
+    require_secret(secret, ("ADMIN_SECRET",), "Admin")
+    store = get_wa_memory_store()
+    conversations = store.list_conversations(limit=limit)
+    return {"total": len(conversations), "conversations": conversations}
+
+
+@app.get("/api/whatsapp/conversations/{phone}")
+async def api_whatsapp_conversation(phone: str, secret: str = "", limit: int = 100):
+    """Return one conversation with transcript and agent memory."""
+    require_secret(secret, ("ADMIN_SECRET",), "Admin")
+    store = get_wa_memory_store()
+    return {
+        "conversation": store.get_conversation(phone),
+        "profile": store.get_profile(phone),
+        "last_query": store.get_last_query(phone),
+        "messages": store.get_messages(phone, limit=limit),
+    }
+
+
+@app.post("/api/whatsapp/conversations/{phone}/takeover")
+async def api_whatsapp_takeover(phone: str, secret: str = ""):
+    """Pause AI auto-replies for a parent while an operator handles them."""
+    require_secret(secret, ("ADMIN_SECRET",), "Admin")
+    conversation = get_wa_memory_store().set_conversation_status(phone, "human")
+    return {"success": True, "conversation": conversation}
+
+
+@app.post("/api/whatsapp/conversations/{phone}/resume-ai")
+async def api_whatsapp_resume_ai(phone: str, secret: str = ""):
+    """Resume AI auto-replies for a parent."""
+    require_secret(secret, ("ADMIN_SECRET",), "Admin")
+    conversation = get_wa_memory_store().set_conversation_status(phone, "ai")
+    return {"success": True, "conversation": conversation}
+
+
+@app.post("/api/whatsapp/conversations/{phone}/messages")
+async def api_whatsapp_admin_message(
+    phone: str,
+    payload: AdminMessageRequest,
+    secret: str = "",
+):
+    """Send a manual WhatsApp reply from the operator console."""
+    require_secret(secret, ("ADMIN_SECRET",), "Admin")
+    handler = get_wa_handler()
+    if not handler:
+        raise HTTPException(status_code=500, detail="WhatsApp is not configured")
+    if not handler.send_admin_message(phone, payload.body):
+        raise HTTPException(status_code=502, detail="WhatsApp message failed")
+    return {"success": True}
 
 
 # ============== 企業微信客服回調 ==============

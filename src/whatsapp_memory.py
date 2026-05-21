@@ -7,7 +7,7 @@ import sqlite3
 from datetime import date, datetime
 from pathlib import Path
 from threading import RLock
-from typing import Any, Dict
+from typing import Any, Dict, List
 from contextlib import closing
 
 logger = logging.getLogger(__name__)
@@ -71,6 +71,51 @@ class WhatsAppMemoryStore:
                     )
                     """
                 )
+                conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS whatsapp_conversations (
+                        phone TEXT PRIMARY KEY,
+                        display_name TEXT NOT NULL DEFAULT '',
+                        status TEXT NOT NULL DEFAULT 'ai',
+                        tags_json TEXT NOT NULL DEFAULT '[]',
+                        notes TEXT NOT NULL DEFAULT '',
+                        last_message_at TEXT NOT NULL DEFAULT '',
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL
+                    )
+                    """
+                )
+                conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS whatsapp_messages (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        phone TEXT NOT NULL,
+                        direction TEXT NOT NULL,
+                        source TEXT NOT NULL,
+                        body TEXT NOT NULL,
+                        meta_json TEXT NOT NULL DEFAULT '{}',
+                        created_at TEXT NOT NULL
+                    )
+                    """
+                )
+                conn.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS idx_whatsapp_messages_phone_created
+                    ON whatsapp_messages (phone, created_at)
+                    """
+                )
+                conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS whatsapp_agent_flags (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        phone TEXT NOT NULL,
+                        flag_type TEXT NOT NULL,
+                        summary TEXT NOT NULL,
+                        resolved_at TEXT NOT NULL DEFAULT '',
+                        created_at TEXT NOT NULL
+                    )
+                    """
+                )
                 conn.commit()
 
     def get_profile(self, phone: str) -> Dict[str, Any]:
@@ -115,6 +160,146 @@ class WhatsAppMemoryStore:
                     (phone, now, now),
                 )
                 conn.commit()
+
+    def record_message(
+        self,
+        phone: str,
+        direction: str,
+        source: str,
+        body: str,
+        meta: Dict[str, Any] | None = None,
+    ) -> None:
+        """Append a transcript message and touch the conversation row."""
+        if not phone or not body:
+            return
+        if direction not in {"inbound", "outbound"}:
+            raise ValueError(f"Unsupported direction: {direction}")
+        if source not in {"parent", "ai", "admin", "system"}:
+            raise ValueError(f"Unsupported source: {source}")
+
+        now = datetime.now().isoformat()
+        meta_payload = json.dumps(meta or {}, ensure_ascii=False)
+        with self._lock:
+            with closing(sqlite3.connect(str(self.db_path))) as conn:
+                self._upsert_conversation(conn, phone, now)
+                conn.execute(
+                    """
+                    INSERT INTO whatsapp_messages (
+                        phone, direction, source, body, meta_json, created_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (phone, direction, source, body, meta_payload, now),
+                )
+                conn.execute(
+                    """
+                    UPDATE whatsapp_conversations
+                    SET last_message_at = ?, updated_at = ?
+                    WHERE phone = ?
+                    """,
+                    (now, now, phone),
+                )
+                conn.commit()
+
+    def list_conversations(self, limit: int = 50) -> List[Dict[str, Any]]:
+        limit = max(1, min(int(limit or 50), 200))
+        with self._lock:
+            with closing(sqlite3.connect(str(self.db_path))) as conn:
+                conn.row_factory = sqlite3.Row
+                rows = conn.execute(
+                    """
+                    SELECT
+                        c.phone,
+                        c.display_name,
+                        c.status,
+                        c.tags_json,
+                        c.notes,
+                        c.last_message_at,
+                        c.created_at,
+                        c.updated_at,
+                        (
+                            SELECT body FROM whatsapp_messages m
+                            WHERE m.phone = c.phone
+                            ORDER BY m.created_at DESC, m.id DESC
+                            LIMIT 1
+                        ) AS latest_message
+                    FROM whatsapp_conversations c
+                    ORDER BY COALESCE(NULLIF(c.last_message_at, ''), c.updated_at) DESC
+                    LIMIT ?
+                    """,
+                    (limit,),
+                ).fetchall()
+        return [self._conversation_row_to_dict(row) for row in rows]
+
+    def get_conversation(self, phone: str) -> Dict[str, Any]:
+        if not phone:
+            return {}
+        now = datetime.now().isoformat()
+        with self._lock:
+            with closing(sqlite3.connect(str(self.db_path))) as conn:
+                conn.row_factory = sqlite3.Row
+                self._upsert_conversation(conn, phone, now)
+                conn.commit()
+                row = conn.execute(
+                    """
+                    SELECT phone, display_name, status, tags_json, notes,
+                           last_message_at, created_at, updated_at
+                    FROM whatsapp_conversations
+                    WHERE phone = ?
+                    """,
+                    (phone,),
+                ).fetchone()
+        return self._conversation_row_to_dict(row) if row else {}
+
+    def get_messages(self, phone: str, limit: int = 100) -> List[Dict[str, Any]]:
+        if not phone:
+            return []
+        limit = max(1, min(int(limit or 100), 300))
+        with self._lock:
+            with closing(sqlite3.connect(str(self.db_path))) as conn:
+                conn.row_factory = sqlite3.Row
+                rows = conn.execute(
+                    """
+                    SELECT id, phone, direction, source, body, meta_json, created_at
+                    FROM whatsapp_messages
+                    WHERE phone = ?
+                    ORDER BY created_at DESC, id DESC
+                    LIMIT ?
+                    """,
+                    (phone, limit),
+                ).fetchall()
+        return [self._message_row_to_dict(row) for row in reversed(rows)]
+
+    def set_conversation_status(self, phone: str, status: str) -> Dict[str, Any]:
+        if status not in {"ai", "human"}:
+            raise ValueError(f"Unsupported conversation status: {status}")
+        now = datetime.now().isoformat()
+        with self._lock:
+            with closing(sqlite3.connect(str(self.db_path))) as conn:
+                conn.row_factory = sqlite3.Row
+                self._upsert_conversation(conn, phone, now)
+                conn.execute(
+                    """
+                    UPDATE whatsapp_conversations
+                    SET status = ?, updated_at = ?
+                    WHERE phone = ?
+                    """,
+                    (status, now, phone),
+                )
+                conn.commit()
+                row = conn.execute(
+                    """
+                    SELECT phone, display_name, status, tags_json, notes,
+                           last_message_at, created_at, updated_at
+                    FROM whatsapp_conversations
+                    WHERE phone = ?
+                    """,
+                    (phone,),
+                ).fetchone()
+        return self._conversation_row_to_dict(row) if row else {}
+
+    def is_human_takeover(self, phone: str) -> bool:
+        return self.get_conversation(phone).get("status") == "human"
 
     def claim_message(self, message_id: str, phone: str = "") -> bool:
         """Return True only for the first time a WhatsApp message id is seen."""
@@ -258,6 +443,39 @@ class WhatsAppMemoryStore:
                     )
                 conn.commit()
                 return True
+
+    @staticmethod
+    def _safe_json(raw: str, fallback: Any) -> Any:
+        if not raw:
+            return fallback
+        try:
+            return json.loads(raw)
+        except json.JSONDecodeError:
+            return fallback
+
+    def _upsert_conversation(self, conn: sqlite3.Connection, phone: str, now: str) -> None:
+        conn.execute(
+            """
+            INSERT INTO whatsapp_conversations (
+                phone, display_name, status, tags_json, notes,
+                last_message_at, created_at, updated_at
+            )
+            VALUES (?, '', 'ai', '[]', '', '', ?, ?)
+            ON CONFLICT(phone) DO UPDATE SET
+                updated_at=excluded.updated_at
+            """,
+            (phone, now, now),
+        )
+
+    def _conversation_row_to_dict(self, row: sqlite3.Row) -> Dict[str, Any]:
+        result = dict(row)
+        result["tags"] = self._safe_json(result.pop("tags_json", "[]"), [])
+        return result
+
+    def _message_row_to_dict(self, row: sqlite3.Row) -> Dict[str, Any]:
+        result = dict(row)
+        result["meta"] = self._safe_json(result.pop("meta_json", "{}"), {})
+        return result
 
     def _get_json(self, phone: str, column: str) -> Dict[str, Any]:
         if column not in {"profile_json", "last_query_json"}:

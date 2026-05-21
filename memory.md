@@ -15,10 +15,12 @@
 - 已接入 DeepSeek 作為課程推薦文字助手。
 - 已有 SQLite 記憶：家長偏好、上次查詢、訊息去重、LLM 使用量、LLM 快取。
 - 已有 off-topic guardrail，無關問題不應進入 DeepSeek。
+- 已加強長篇/AI/離題訊息收口：沒有課程意圖的長文會本地拒答，不進 DeepSeek，也不改家長偏好。
 - 課程回覆已改為直接附官方報名連結，不再要求先回覆 `詳情1` 才看到 link。
 - `更多`、`下一頁`、`還有嗎` 會延續上次查詢。
 - `13-18歲` / `青少年` 查詢已修正為會抓該年齡層來源，不只看首頁 open list。
 - 根目錄 `/` 是給 Meta / 家長看的公開 landing page，`HEAD /` 也會回 200。
+- 已開始 Agentic Admin MVP：記錄 inbound/outbound transcript、conversation status、人工接手/恢復 AI、人工回覆 API、受 `ADMIN_SECRET` 保護的 `/admin` 初版介面。
 
 家長入口：
 
@@ -107,14 +109,14 @@ git diff --check
 - DeepSeek prompt and fallback.
 - LLM cache and quota.
 - Off-topic tests.
-- Admin API only at a primitive level: `/api/users`, `/api/push`, `/api/cron`.
+- Conversation transcript tables.
+- Human takeover / resume AI state.
+- Admin API and simple `/admin` dashboard for WhatsApp conversations.
+- Manual admin reply endpoint through WhatsApp Cloud API.
+- Legacy admin API: `/api/users`, `/api/push`, `/api/cron`.
 
 ### Does not exist yet
 
-- Real `/admin` dashboard.
-- Full inbound/outbound transcript table.
-- Human takeover status.
-- Manual reply UI.
 - Parent notes/tags.
 - AI uncertainty queue.
 - Proactive personalized course push flow.
@@ -122,18 +124,27 @@ git diff --check
 
 ## Recommended Next Build
 
-Build the operator dashboard first.
+Deepen the operator dashboard and proactive agent loop.
 
-Minimum useful MVP:
+Already done in MVP:
 
-1. Add database tables for conversation messages and parent agent state.
-2. Record every inbound WhatsApp text message.
-3. Record every outbound bot/admin reply.
-4. Add `/admin` HTML dashboard.
-5. Show parent list, latest message, memory summary, and transcript.
-6. Add human takeover / resume AI.
-7. Add manual send message endpoint.
-8. Add tests for auth, transcript logging, takeover suppression, and manual reply.
+- Database tables for conversation messages and parent agent state.
+- Every inbound WhatsApp text message is recorded.
+- Outbound AI/admin replies are recorded.
+- `/admin` HTML dashboard exists.
+- Parent list, latest message, memory summary, transcript exist.
+- Human takeover / resume AI exist.
+- Manual send endpoint exists.
+- Tests cover transcript logging, takeover suppression, and manual reply.
+
+Next useful build:
+
+1. Add notes/tags editing in `/admin`.
+2. Add AI uncertainty/no-match flags.
+3. Add parent allow-list/consent status for proactive pushes.
+4. Build a new-course matcher: new DSEDJ course -> match stored parent memories -> draft recommendation.
+5. Add WhatsApp template handling for outbound messages outside the 24-hour window.
+6. Improve `/admin` auth beyond query-string secret before wider use.
 
 Recommended table direction:
 
