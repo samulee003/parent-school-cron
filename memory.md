@@ -19,8 +19,11 @@
 - 課程回覆已改為直接附官方報名連結，不再要求先回覆 `詳情1` 才看到 link。
 - `更多`、`下一頁`、`還有嗎` 會延續上次查詢。
 - `13-18歲` / `青少年` 查詢已修正為會抓該年齡層來源，不只看首頁 open list。
+- 爬蟲已可抓目前列表全部課程，並進入詳情頁第二層內容，補上 `summary` 大綱與 `registration_url` 真正報名連結。
+- WhatsApp 推薦會把家長痛點映射到主題，並用課程大綱文字做匹配，不只看課程名稱。
 - 根目錄 `/` 是給 Meta / 家長看的公開 landing page，`HEAD /` 也會回 200。
 - 已開始 Agentic Admin MVP：記錄 inbound/outbound transcript、conversation status、人工接手/恢復 AI、人工回覆 API、受 `ADMIN_SECRET` 保護的 `/admin` 初版介面。
+- `/admin` 已有家長標籤、備註、不確定/無匹配隊列、主動匹配草稿。
 
 家長入口：
 
@@ -52,7 +55,13 @@ python -B -m compileall src
 git diff --check
 ```
 
-最近一次已知測試數量：`39` 個 unittest 通過。
+最近一次已知測試數量：`54` 個 unittest 通過。
+
+2026-05-21 實站爬蟲驗證：
+
+- 目前列表抓到 `145` 個課程。
+- `145` 個課程都有詳情頁大綱 `summary`。
+- `110` 個課程抓到真正報名連結 `registration_url`，包含 DSEDJ `actregspace` 和 `activity.mo.gov.mo`。
 
 線上曾驗證：
 
@@ -113,13 +122,16 @@ git diff --check
 - Human takeover / resume AI state.
 - Admin API and simple `/admin` dashboard for WhatsApp conversations.
 - Manual admin reply endpoint through WhatsApp Cloud API.
+- Parent notes/tags.
+- AI uncertainty/no-match flags.
+- Proactive match draft endpoint.
+- Course detail summaries and real registration links.
 - Legacy admin API: `/api/users`, `/api/push`, `/api/cron`.
 
 ### Does not exist yet
 
-- Parent notes/tags.
-- AI uncertainty queue.
-- Proactive personalized course push flow.
+- Parent consent / allow-list for proactive push.
+- Operator approval flow for proactive push drafts.
 - WhatsApp template management for messages outside the 24-hour user window.
 
 ## Recommended Next Build
@@ -139,12 +151,11 @@ Already done in MVP:
 
 Next useful build:
 
-1. Add notes/tags editing in `/admin`.
-2. Add AI uncertainty/no-match flags.
-3. Add parent allow-list/consent status for proactive pushes.
-4. Build a new-course matcher: new DSEDJ course -> match stored parent memories -> draft recommendation.
-5. Add WhatsApp template handling for outbound messages outside the 24-hour window.
-6. Improve `/admin` auth beyond query-string secret before wider use.
+1. Add parent allow-list/consent status for proactive pushes.
+2. Add operator approval/send flow for proactive match drafts.
+3. Add WhatsApp template handling for outbound messages outside the 24-hour window.
+4. Improve `/admin` auth beyond query-string secret before wider use.
+5. Add monitoring for DSEDJ HTML changes, especially detail-page parsing.
 
 Recommended table direction:
 

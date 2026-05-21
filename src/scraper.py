@@ -9,7 +9,7 @@ from typing import List, Dict, Optional
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
 import requests
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, NavigableString
 
 logger = logging.getLogger(__name__)
 
@@ -82,6 +82,8 @@ class Course:
     detail_url: str
     week_number: int = 0
     age_groups: List[str] = field(default_factory=list)
+    summary: str = ""
+    registration_url: str = ""
 
 
 class CourseScraper:
@@ -90,6 +92,7 @@ class CourseScraper:
     def __init__(self, base_url: str = "https://portal.dsedj.gov.mo"):
         self.base_url = base_url
         self.session = requests.Session()
+        self._detail_cache: Dict[str, Dict[str, str]] = {}
         self.session.headers.update({
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
@@ -105,8 +108,10 @@ class CourseScraper:
         target: str = "",
         status: str = "報名中",
         keyword: str = "",
+        include_details: bool = False,
         max_retries: int = 3,
         delay: float = 1.0,
+        detail_delay: float = 0.2,
     ) -> List[Course]:
         """
         抓取課程列表
@@ -117,8 +122,10 @@ class CourseScraper:
             target: 對象過濾 (家長/親子)
             status: 報名狀態 (報名中/待報名/已完成報名)
             keyword: 關鍵字搜索
+            include_details: 是否進入課程詳情頁抓取內容大綱與報名連結
             max_retries: 最大重試次數
             delay: 請求間隔秒數
+            detail_delay: 詳情頁請求間隔秒數
 
         Returns:
             課程列表
@@ -155,6 +162,9 @@ class CourseScraper:
             page += 1
             if page <= total_pages:
                 time.sleep(delay)
+
+        if include_details:
+            self.enrich_course_details(all_courses, delay=detail_delay)
 
         logger.info(f"共抓取 {len(all_courses)} 條課程")
         return all_courses
@@ -324,9 +334,33 @@ class CourseScraper:
 
         return None
 
-    def fetch_all_open_courses(self, max_retries: int = 3, delay: float = 1.0) -> List[Course]:
+    def fetch_all_open_courses(
+        self,
+        max_retries: int = 3,
+        delay: float = 1.0,
+        include_details: bool = False,
+    ) -> List[Course]:
         """抓取所有報名中的課程"""
-        return self.fetch_courses(status="報名中", max_retries=max_retries, delay=delay)
+        return self.fetch_courses(
+            status="報名中",
+            max_retries=max_retries,
+            delay=delay,
+            include_details=include_details,
+        )
+
+    def fetch_all_current_courses(
+        self,
+        max_retries: int = 3,
+        delay: float = 1.0,
+        include_details: bool = True,
+    ) -> List[Course]:
+        """抓取目前列表中的所有課程，可包含詳情頁內容。"""
+        return self.fetch_courses(
+            status="",
+            max_retries=max_retries,
+            delay=delay,
+            include_details=include_details,
+        )
 
     def fetch_all_age_groups(self, max_retries: int = 3, delay: float = 1.0) -> Dict[str, List[Course]]:
         """按年齡層分別抓取所有課程"""
@@ -336,3 +370,127 @@ class CourseScraper:
             courses = self.fetch_courses(age_group=age, max_retries=max_retries, delay=delay)
             result[age] = courses
         return result
+
+    def enrich_course_details(self, courses: List[Course], delay: float = 0.2) -> List[Course]:
+        """為課程列表補上詳情頁大綱與真正報名連結。"""
+        for index, course in enumerate(courses):
+            try:
+                detail = self.fetch_course_detail(course)
+            except Exception as e:
+                logger.warning("抓取課程詳情失敗 id=%s name=%s: %s", course.id, course.name, e)
+                detail = {}
+            if detail.get("summary"):
+                course.summary = detail["summary"]
+            if detail.get("registration_url"):
+                course.registration_url = detail["registration_url"]
+            if detail.get("date") and not course.date:
+                course.date = detail["date"]
+                course.date_parsed = self._parse_date(course.date)
+            if index < len(courses) - 1 and delay > 0:
+                time.sleep(delay)
+        return courses
+
+    def fetch_course_detail(self, course: Course) -> Dict[str, str]:
+        """抓取單一課程的詳情內容。
+
+        家長學堂詳情頁本身是 wrapper，真正內容由
+        Msg_funcmain_parentacademy_page.jsp 載入。這裡直接抓第二層內容，
+        讓後續推薦可以看見活動大綱，而不是只看課程名稱。
+        """
+        msg_id = course.id or self._extract_msg_id(course.detail_url)
+        if not msg_id:
+            return {}
+        cache_key = f"{msg_id}:{course.status}"
+        if cache_key in self._detail_cache:
+            return dict(self._detail_cache[cache_key])
+
+        url = f"{self.base_url}/webdsejspace/addon/allmain/msgfunc/Msg_funcmain_parentacademy_page.jsp"
+        params = {
+            "iscon": "1",
+            "msg_id": msg_id,
+            "search_data": "",
+            "regstatus": course.status,
+            "langsel": "C",
+        }
+        response = self.session.get(url, params=params, timeout=30)
+        response.raise_for_status()
+        detail = self._parse_course_detail_html(response.text)
+        self._detail_cache[cache_key] = detail
+        return dict(detail)
+
+    @staticmethod
+    def _extract_msg_id(url: str) -> str:
+        if not url:
+            return ""
+        try:
+            parts = urlsplit(str(url).replace("&amp;", "&"))
+        except ValueError:
+            return ""
+        params = dict(parse_qsl(parts.query, keep_blank_values=True))
+        return str(params.get("msg_id", ""))
+
+    def _parse_course_detail_html(self, html: str) -> Dict[str, str]:
+        soup = BeautifulSoup(html or "", "html.parser")
+        main = soup.find("div", class_="main") or soup
+
+        for node in main.find_all(["script", "style"]):
+            node.decompose()
+
+        summary_parts = [
+            self._clean_detail_text(li.get_text(" ", strip=True))
+            for li in main.find_all("li")
+        ]
+        summary_parts = [part for part in summary_parts if part]
+
+        if not summary_parts:
+            for paragraph in main.find_all("p"):
+                text = self._clean_detail_text(paragraph.get_text(" ", strip=True))
+                if not text or "報名連結" in text or "报名链接" in text:
+                    continue
+                if text in summary_parts:
+                    continue
+                summary_parts.append(text)
+
+        if not summary_parts:
+            for child in main.children:
+                if not isinstance(child, NavigableString):
+                    continue
+                text = self._clean_detail_text(str(child))
+                if text:
+                    summary_parts.append(text)
+
+        registration_url = ""
+        for link in main.find_all("a", href=True):
+            href = str(link.get("href", "")).strip()
+            text = link.get_text(" ", strip=True)
+            parent_text = ""
+            parent = link.find_parent()
+            if parent:
+                parent_text = parent.get_text(" ", strip=True)
+            if (
+                "actregspace" in href
+                or "activity.mo.gov.mo" in href
+                or "報名" in text
+                or "报名" in text
+                or "報名" in parent_text
+                or "报名" in parent_text
+            ):
+                registration_url = urljoin(self.base_url, href)
+                break
+
+        date_text = ""
+        date_match = re.search(r"活動日期[:：]\s*([^\n\r<]+)", main.get_text("\n", strip=True))
+        if date_match:
+            date_text = self._clean_detail_text(date_match.group(1))
+
+        return {
+            "summary": self._clean_detail_text(" ".join(summary_parts))[:800],
+            "registration_url": registration_url,
+            "date": date_text,
+        }
+
+    @staticmethod
+    def _clean_detail_text(text: str) -> str:
+        text = re.sub(r"\s+", " ", str(text or "")).strip()
+        text = re.sub(r"^[\-\u2022\d\.\)、）\s]+", "", text)
+        return text

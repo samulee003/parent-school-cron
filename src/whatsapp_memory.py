@@ -111,12 +111,33 @@ class WhatsAppMemoryStore:
                         phone TEXT NOT NULL,
                         flag_type TEXT NOT NULL,
                         summary TEXT NOT NULL,
+                        meta_json TEXT NOT NULL DEFAULT '{}',
                         resolved_at TEXT NOT NULL DEFAULT '',
                         created_at TEXT NOT NULL
                     )
                     """
                 )
+                self._ensure_column(
+                    conn,
+                    "whatsapp_agent_flags",
+                    "meta_json",
+                    "TEXT NOT NULL DEFAULT '{}'",
+                )
                 conn.commit()
+
+    @staticmethod
+    def _ensure_column(
+        conn: sqlite3.Connection,
+        table: str,
+        column: str,
+        definition: str,
+    ) -> None:
+        existing = {
+            str(row[1])
+            for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
+        }
+        if column not in existing:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
     def get_profile(self, phone: str) -> Dict[str, Any]:
         return dict(self._get_json(phone, "profile_json"))
@@ -251,6 +272,59 @@ class WhatsAppMemoryStore:
                 ).fetchone()
         return self._conversation_row_to_dict(row) if row else {}
 
+    def update_conversation(
+        self,
+        phone: str,
+        display_name: str | None = None,
+        tags: List[str] | None = None,
+        notes: str | None = None,
+    ) -> Dict[str, Any]:
+        if not phone:
+            return {}
+
+        now = datetime.now().isoformat()
+        with self._lock:
+            with closing(sqlite3.connect(str(self.db_path))) as conn:
+                conn.row_factory = sqlite3.Row
+                self._upsert_conversation(conn, phone, now)
+                updates = ["updated_at = ?"]
+                values: List[Any] = [now]
+                if display_name is not None:
+                    updates.append("display_name = ?")
+                    values.append(display_name.strip())
+                if tags is not None:
+                    clean_tags = self._clean_tags(tags)
+                    updates.append("tags_json = ?")
+                    values.append(json.dumps(clean_tags, ensure_ascii=False))
+                if notes is not None:
+                    updates.append("notes = ?")
+                    values.append(notes.strip())
+                values.append(phone)
+                conn.execute(
+                    f"""
+                    UPDATE whatsapp_conversations
+                    SET {', '.join(updates)}
+                    WHERE phone = ?
+                    """,
+                    values,
+                )
+                conn.commit()
+                row = conn.execute(
+                    """
+                    SELECT phone, display_name, status, tags_json, notes,
+                           last_message_at, created_at, updated_at
+                    FROM whatsapp_conversations
+                    WHERE phone = ?
+                    """,
+                    (phone,),
+                ).fetchone()
+        return self._conversation_row_to_dict(row) if row else {}
+
+    def add_conversation_tags(self, phone: str, tags: List[str]) -> Dict[str, Any]:
+        current = self.get_conversation(phone)
+        existing = current.get("tags", []) if current else []
+        return self.update_conversation(phone, tags=[*existing, *tags])
+
     def get_messages(self, phone: str, limit: int = 100) -> List[Dict[str, Any]]:
         if not phone:
             return []
@@ -300,6 +374,87 @@ class WhatsAppMemoryStore:
 
     def is_human_takeover(self, phone: str) -> bool:
         return self.get_conversation(phone).get("status") == "human"
+
+    def add_agent_flag(
+        self,
+        phone: str,
+        flag_type: str,
+        summary: str,
+        meta: Dict[str, Any] | None = None,
+    ) -> int:
+        if flag_type not in {"no_match", "uncertain", "handoff_needed", "error"}:
+            raise ValueError(f"Unsupported flag type: {flag_type}")
+        if not phone or not summary:
+            return 0
+
+        now = datetime.now().isoformat()
+        meta_payload = json.dumps(meta or {}, ensure_ascii=False)
+        with self._lock:
+            with closing(sqlite3.connect(str(self.db_path))) as conn:
+                self._upsert_conversation(conn, phone, now)
+                cursor = conn.execute(
+                    """
+                    INSERT INTO whatsapp_agent_flags (
+                        phone, flag_type, summary, meta_json, resolved_at, created_at
+                    )
+                    VALUES (?, ?, ?, ?, '', ?)
+                    """,
+                    (phone, flag_type, summary.strip(), meta_payload, now),
+                )
+                conn.commit()
+                return int(cursor.lastrowid or 0)
+
+    def list_agent_flags(
+        self,
+        unresolved_only: bool = True,
+        limit: int = 100,
+    ) -> List[Dict[str, Any]]:
+        limit = max(1, min(int(limit or 100), 300))
+        where = "WHERE resolved_at = ''" if unresolved_only else ""
+        with self._lock:
+            with closing(sqlite3.connect(str(self.db_path))) as conn:
+                conn.row_factory = sqlite3.Row
+                rows = conn.execute(
+                    f"""
+                    SELECT id, phone, flag_type, summary, meta_json, resolved_at, created_at
+                    FROM whatsapp_agent_flags
+                    {where}
+                    ORDER BY created_at DESC, id DESC
+                    LIMIT ?
+                    """,
+                    (limit,),
+                ).fetchall()
+        return [self._flag_row_to_dict(row) for row in rows]
+
+    def resolve_agent_flag(self, flag_id: int) -> bool:
+        now = datetime.now().isoformat()
+        with self._lock:
+            with closing(sqlite3.connect(str(self.db_path))) as conn:
+                cursor = conn.execute(
+                    """
+                    UPDATE whatsapp_agent_flags
+                    SET resolved_at = ?
+                    WHERE id = ? AND resolved_at = ''
+                    """,
+                    (now, flag_id),
+                )
+                conn.commit()
+                return cursor.rowcount > 0
+
+    def iter_parent_profiles(self, limit: int = 200) -> List[Dict[str, Any]]:
+        limit = max(1, min(int(limit or 200), 1000))
+        conversations = self.list_conversations(limit=limit)
+        parents = []
+        for conversation in conversations:
+            phone = conversation.get("phone", "")
+            profile = self.get_profile(phone)
+            if profile:
+                parents.append({
+                    "phone": phone,
+                    "conversation": conversation,
+                    "profile": profile,
+                })
+        return parents
 
     def claim_message(self, message_id: str, phone: str = "") -> bool:
         """Return True only for the first time a WhatsApp message id is seen."""
@@ -453,6 +608,16 @@ class WhatsAppMemoryStore:
         except json.JSONDecodeError:
             return fallback
 
+    @staticmethod
+    def _clean_tags(tags: List[str]) -> List[str]:
+        clean: List[str] = []
+        for tag in tags:
+            tag_text = str(tag or "").strip()
+            if not tag_text or tag_text in clean:
+                continue
+            clean.append(tag_text[:32])
+        return clean[:20]
+
     def _upsert_conversation(self, conn: sqlite3.Connection, phone: str, now: str) -> None:
         conn.execute(
             """
@@ -473,6 +638,11 @@ class WhatsAppMemoryStore:
         return result
 
     def _message_row_to_dict(self, row: sqlite3.Row) -> Dict[str, Any]:
+        result = dict(row)
+        result["meta"] = self._safe_json(result.pop("meta_json", "{}"), {})
+        return result
+
+    def _flag_row_to_dict(self, row: sqlite3.Row) -> Dict[str, Any]:
         result = dict(row)
         result["meta"] = self._safe_json(result.pop("meta_json", "{}"), {})
         return result

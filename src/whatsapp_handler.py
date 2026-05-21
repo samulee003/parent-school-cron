@@ -8,6 +8,7 @@ import logging
 import os
 import hashlib
 import hmac
+import inspect
 import json
 import re
 from typing import Optional, List, Dict, Any
@@ -53,6 +54,12 @@ COURSE_DOMAIN_KEYWORDS = (
     "家長", "家长", "小朋友", "孩子", "子女", "嬰幼", "婴幼",
     "幼兒", "幼儿", "小學", "小学", "青少年", "中學", "中学",
 )
+PARENT_CONTEXT_KEYWORDS = (
+    "小朋友", "孩子", "子女", "仔女", "兒子", "儿子", "女兒", "女儿",
+    "我個仔", "我个仔", "我個女", "我个女", "家長", "家长", "父母",
+    "媽媽", "妈妈", "爸爸", "幼兒", "幼儿", "小學生", "小学生",
+    "中學生", "中学生", "青少年", "bb", "寶寶", "宝宝",
+)
 OFF_TOPIC_KEYWORDS = (
     "餐廳", "餐厅", "外賣", "外卖", "酒店", "機票", "机票", "航班",
     "天氣", "天气", "股票", "投資", "投资", "幣", "币", "匯率", "汇率",
@@ -66,6 +73,65 @@ OUT_OF_SCOPE_AI_KEYWORDS = (
     "人工智能", "ai工具", "ai 工具", "大模型", "論文", "论文",
 )
 LONG_MESSAGE_OFF_TOPIC_CHARS = 120
+PAIN_POINT_RULES = [
+    {
+        "tag": "情緒壓力",
+        "topic": "身心健康",
+        "keywords": (
+            "情緒", "情绪", "焦慮", "焦虑", "壓力", "压力", "發脾氣", "发脾气",
+            "易怒", "暴躁", "抑鬱", "抑郁", "心情", "哭", "青春期",
+        ),
+    },
+    {
+        "tag": "親子溝通",
+        "topic": "家庭關係",
+        "keywords": (
+            "溝通", "沟通", "頂嘴", "顶嘴", "衝突", "冲突", "吵架",
+            "反叛", "叛逆", "不聽話", "不听话", "管教", "親子關係", "亲子关系",
+        ),
+    },
+    {
+        "tag": "學習動機",
+        "topic": "學習與成就感",
+        "keywords": (
+            "學習", "学习", "功課", "功课", "成績", "成绩", "考試", "考试",
+            "專注", "专注", "拖延", "讀書", "读书", "動機", "动机",
+        ),
+    },
+    {
+        "tag": "環境適應",
+        "topic": "環境適應",
+        "keywords": (
+            "適應", "适应", "入學", "入学", "轉校", "转校", "升小",
+            "升中", "分離", "分离", "新環境", "新环境",
+        ),
+    },
+    {
+        "tag": "社交人際",
+        "topic": "社會人際關係",
+        "keywords": (
+            "交朋友", "無朋友", "沒有朋友", "冇朋友", "朋友少",
+            "同學", "同学", "社交", "人際", "人际", "欺凌",
+            "孤立", "群體", "群体", "相處", "相处",
+        ),
+    },
+    {
+        "tag": "生活照顧",
+        "topic": "生活照顧",
+        "keywords": (
+            "睡眠", "瞓覺", "睡覺", "吃飯", "食飯", "飲食", "自理",
+            "如廁", "戒片", "生活習慣", "生活习惯",
+        ),
+    },
+    {
+        "tag": "科技使用",
+        "topic": "科技素養",
+        "keywords": (
+            "手機", "手机", "打機", "遊戲", "游戏", "上網", "上网",
+            "短片", "平板", "網絡", "网络", "沉迷",
+        ),
+    },
+]
 
 
 def get_phone_number_id() -> str:
@@ -214,6 +280,26 @@ def detect_topic(text: str) -> str:
     return ""
 
 
+def detect_pain_points(text: str) -> List[Dict[str, str]]:
+    """Detect parent pain points and map them to course topics."""
+    text_lower = text.strip().lower()
+    matches: List[Dict[str, str]] = []
+    for rule in PAIN_POINT_RULES:
+        if any(_contains_pain_keyword(text_lower, str(keyword)) for keyword in rule["keywords"]):
+            matches.append({
+                "tag": str(rule["tag"]),
+                "topic": str(rule["topic"]),
+            })
+    return matches
+
+
+def _contains_pain_keyword(text_lower: str, keyword: str) -> bool:
+    keyword_lower = keyword.lower()
+    if not keyword_lower:
+        return False
+    return keyword_lower in text_lower
+
+
 class WhatsAppHandler:
     """WhatsApp Cloud API 消息處理器"""
 
@@ -304,6 +390,70 @@ class WhatsAppHandler:
             return [str(value)]
         return []
 
+    def _course_reply_url(self, course: Any) -> str:
+        registration_url = self._course_value(course, "registration_url")
+        if registration_url:
+            return registration_url
+        return normalize_course_detail_url(self._course_value(course, "detail_url"))
+
+    def _course_matching_text(self, course: Any) -> str:
+        parts = [
+            self._course_value(course, "name"),
+            self._course_value(course, "topic"),
+            self._course_value(course, "target"),
+            self._course_value(course, "summary"),
+        ]
+        return " ".join(part for part in parts if part).lower()
+
+    @staticmethod
+    def _pain_rule(tag: str) -> Dict[str, Any]:
+        for rule in PAIN_POINT_RULES:
+            if str(rule["tag"]) == str(tag):
+                return rule
+        return {}
+
+    def _course_pain_reasons(self, course: Any, pain_points: List[str]) -> List[str]:
+        if not pain_points:
+            return []
+
+        course_topic = self._course_value(course, "topic")
+        haystack = self._course_matching_text(course)
+        reasons: List[str] = []
+        for tag in pain_points:
+            rule = self._pain_rule(str(tag))
+            if not rule:
+                continue
+            topic = str(rule.get("topic", ""))
+            keywords = [str(k) for k in rule.get("keywords", [])]
+            matched_by_outline = any(_contains_pain_keyword(haystack, keyword) for keyword in keywords)
+            if matched_by_outline:
+                reasons.append(f"大綱回應「{tag}」")
+            elif topic and course_topic == topic:
+                reasons.append(f"主題回應「{tag}」")
+        return reasons
+
+    @staticmethod
+    def _method_accepts(method: Any, parameter: str) -> bool:
+        try:
+            signature = inspect.signature(method)
+        except (TypeError, ValueError):
+            return False
+        return (
+            parameter in signature.parameters
+            or any(p.kind == inspect.Parameter.VAR_KEYWORD for p in signature.parameters.values())
+        )
+
+    def _call_course_method(
+        self,
+        method: Any,
+        include_details: bool = False,
+        **kwargs: Any,
+    ) -> List[Any]:
+        call_kwargs = dict(kwargs)
+        if include_details and self._method_accepts(method, "include_details"):
+            call_kwargs["include_details"] = True
+        return method(**call_kwargs)
+
     @staticmethod
     def _parse_page_request(text: str) -> Optional[int]:
         normalized = WhatsAppHandler._normalize_command(text)
@@ -367,7 +517,18 @@ class WhatsAppHandler:
             return True
         if any(k in text.strip().lower() for k in ["報名", "报名", "課程", "课程", "家長學堂", "家长学堂"]):
             return True
+        if WhatsAppHandler._has_parent_pain_signal(text):
+            return True
         return WhatsAppHandler._is_course_intent(text)
+
+    @staticmethod
+    def _has_parent_pain_signal(text: str) -> bool:
+        text_stripped = text.strip()
+        if not detect_pain_points(text_stripped):
+            return False
+        text_lower = text_stripped.lower()
+        has_parent_context = any(k in text_lower for k in PARENT_CONTEXT_KEYWORDS)
+        return has_parent_context or len(text_stripped) <= 80
 
     @staticmethod
     def _is_out_of_scope_request(text: str) -> bool:
@@ -520,13 +681,20 @@ class WhatsAppHandler:
             unique.append(course)
         return unique
 
-    def _fetch_courses(self, course_source: Any, age_group: Any = "") -> List[Any]:
+    def _fetch_courses(
+        self,
+        course_source: Any,
+        age_group: Any = "",
+        include_details: bool = False,
+    ) -> List[Any]:
         age_groups = self._normalize_age_groups(age_group)
         if hasattr(course_source, "fetch_courses"):
             if age_groups:
                 courses = []
                 for age in age_groups:
-                    courses.extend(course_source.fetch_courses(
+                    courses.extend(self._call_course_method(
+                        course_source.fetch_courses,
+                        include_details=include_details,
                         age_group=age,
                         status="",
                         max_retries=2,
@@ -537,7 +705,9 @@ class WhatsAppHandler:
             courses = []
             for age in AGE_GROUP_LABELS:
                 try:
-                    courses.extend(course_source.fetch_courses(
+                    courses.extend(self._call_course_method(
+                        course_source.fetch_courses,
+                        include_details=include_details,
                         age_group=age,
                         status="",
                         max_retries=2,
@@ -548,7 +718,12 @@ class WhatsAppHandler:
             if courses:
                 return self._dedupe_courses(courses)
 
-        return course_source.fetch_all_open_courses(max_retries=2, delay=1.0)
+        return self._call_course_method(
+            course_source.fetch_all_open_courses,
+            include_details=include_details,
+            max_retries=2,
+            delay=1.0,
+        )
 
     def _load_profile(self, from_number: str) -> Dict[str, Any]:
         if from_number not in self._profiles:
@@ -564,6 +739,7 @@ class WhatsAppHandler:
         age_groups = detect_age_groups(text)
         target = self._detect_positive_option(text, TARGETS)
         topic = self._detect_positive_option(text, TOPICS)
+        pain_points = detect_pain_points(text)
         negative_targets = [t for t in TARGETS if self._mentions_negative(text, t)]
         negative_topics = [t for t in TOPICS if self._mentions_negative(text, t)]
 
@@ -576,15 +752,41 @@ class WhatsAppHandler:
             profile.pop("target", None)
         if topic:
             profile["topic"] = topic
+            profile["topic_source"] = "explicit"
         elif profile.get("topic") in negative_topics:
             profile.pop("topic", None)
+            profile.pop("topic_source", None)
+        if pain_points:
+            existing = [str(p) for p in profile.get("pain_points", []) if p]
+            for pain in pain_points:
+                if pain["tag"] not in existing:
+                    existing.append(pain["tag"])
+            profile["pain_points"] = existing[:8]
+            profile["pain_summary"] = text.strip()[:180]
+            if not profile.get("topic"):
+                profile["topic"] = pain_points[0]["topic"]
+                profile["topic_source"] = "pain"
+            self._memory.add_conversation_tags(from_number, [p["tag"] for p in pain_points])
         self._profiles[from_number] = profile
         self._memory.save_profile(from_number, profile)
         return profile
 
     @staticmethod
     def _profile_has_signal(profile: Dict[str, Any]) -> bool:
-        return any(profile.get(k) for k in ["age_group", "age_groups", "target", "topic"])
+        return any(profile.get(k) for k in ["age_group", "age_groups", "target", "topic", "pain_points"])
+
+    def _profile_ready_for_recommendation(self, profile: Dict[str, Any]) -> bool:
+        if self._profile_age_groups(profile):
+            return True
+        if profile.get("pain_points"):
+            return False
+        return bool(profile.get("target") or profile.get("topic"))
+
+    @staticmethod
+    def _topic_for_exact_filter(profile: Dict[str, Any]) -> str:
+        if profile.get("topic_source") == "pain":
+            return ""
+        return str(profile.get("topic", ""))
 
     def _profile_text(self, profile: Dict[str, Any]) -> str:
         if not self._profile_has_signal(profile):
@@ -596,21 +798,35 @@ class WhatsAppHandler:
             parts.append(profile["target"])
         if profile.get("topic"):
             parts.append(profile["topic"])
+        if profile.get("pain_points"):
+            parts.append("痛點：" + "、".join(profile["pain_points"][:3]))
         return "我會先按「" + " / ".join(parts) + "」幫你縮窄。"
 
     def _onboarding_text(self, profile: Dict[str, Any]) -> str:
         if self._profile_has_signal(profile):
+            missing = []
+            if not self._profile_age_groups(profile):
+                missing.append("孩子年齡")
+            if not (profile.get("topic") or profile.get("pain_points")):
+                missing.append("目前最想改善的事")
+            if missing:
+                return (
+                    f"收到，我先記住。\n{self._profile_text(profile)}\n\n"
+                    "為了之後可以主動幫你配課，請再補一句："
+                    f"*{ '、'.join(missing) }*。\n"
+                    "例：*孩子13歲，最近情緒壓力大*。"
+                )
             return (
                 f"好，我先不把全部課程丟給你。\n{self._profile_text(profile)}\n\n"
                 "你可以補一句，例如：*想親子*、*想家長課*、*重視身心健康*。\n"
                 "我會按你的條件推薦少量課程。"
             )
         return (
-            "我先幫你縮窄，不直接丟一堆課程。\n\n"
-            "請回覆一句就可以：\n"
-            "例：*小朋友1歲，想親子活動*\n"
-            "例：*孩子7歲，想環境適應*\n"
-            "例：*家長，想身心健康*\n\n"
+            "我先像簡短訪談一樣了解你，不直接丟一堆課程。\n\n"
+            "請回覆一句：*孩子年齡 + 最近最想改善的事*。\n"
+            "例：*孩子13歲，最近情緒壓力大*\n"
+            "例：*小朋友4歲，剛入學不太適應*\n"
+            "例：*孩子7歲，做功課很拖拉*\n\n"
             "如果你真的要看全列表，回覆 *全部課程*。"
         )
 
@@ -622,6 +838,7 @@ class WhatsAppHandler:
         topic: str = "",
         page: int = 1,
         agentic: bool = False,
+        profile: Optional[Dict[str, Any]] = None,
     ) -> str:
         """獲取課程列表文字"""
         course_source = self._get_course_source()
@@ -629,14 +846,37 @@ class WhatsAppHandler:
             return "課程資料暫時無法取得，請稍後再試。"
 
         try:
-            courses = self._fetch_courses(course_source, age_group=age_group)
-            courses = self._filter_courses(courses, age_group, target, topic)
+            available_courses = self._fetch_courses(
+                course_source,
+                age_group=age_group,
+                include_details=agentic,
+            )
+            topic_filter = topic
+            if profile and profile.get("topic_source") == "pain":
+                topic_filter = ""
+            courses = self._filter_courses(available_courses, age_group, target, topic_filter)
+            if agentic and profile:
+                ranked = self._rank_courses_for_profile(
+                    courses,
+                    profile,
+                    require_pain_match=bool(profile.get("pain_points")),
+                )
+                if ranked or profile.get("pain_points"):
+                    courses = ranked
 
             if not courses:
-                return (
-                    "目前沒有找到符合條件的報名中課程。\n\n"
-                    "可以試試：*課程*、*0-2歲*、*親子*、*家長*、*身心健康*。"
+                self._memory.add_agent_flag(
+                    from_number,
+                    "no_match",
+                    "課程查詢沒有找到符合條件的報名中課程",
+                    {"age_group": age_group, "target": target, "topic": topic},
                 )
+                filter_profile = profile or {
+                    "age_groups": self._normalize_age_groups(age_group),
+                    "target": target,
+                    "topic": topic,
+                }
+                return self._no_match_text(filter_profile, available_courses)
 
             total_pages = max((len(courses) + PAGE_SIZE - 1) // PAGE_SIZE, 1)
             page = min(max(page, 1), total_pages)
@@ -677,7 +917,7 @@ class WhatsAppHandler:
                 course_topic = self._course_value(c, "topic")
                 course_target = self._course_value(c, "target")
                 status = self._course_value(c, "status")
-                link = normalize_course_detail_url(self._course_value(c, "detail_url"))
+                link = self._course_reply_url(c)
                 lines.append(f"\n*{i}. {title}*")
                 if date_str:
                     lines.append(f"📅 {date_str}")
@@ -704,6 +944,11 @@ class WhatsAppHandler:
                         reason_bits.append(f"適合{target}")
                     if topic and self._course_value(c, "topic") == topic:
                         reason_bits.append(f"主題是{topic}")
+                    if profile and profile.get("pain_points"):
+                        reason_bits.extend(self._course_pain_reasons(
+                            c,
+                            [str(p) for p in profile.get("pain_points", []) if p],
+                        )[:2])
                     if reason_bits:
                         lines.append(f"為什麼推薦：{'、'.join(reason_bits)}")
 
@@ -727,8 +972,118 @@ class WhatsAppHandler:
             "topic": self._course_value(course, "topic"),
             "target": self._course_value(course, "target"),
             "status": self._course_value(course, "status"),
+            "summary": self._course_value(course, "summary"),
+            "registration_url": self._course_value(course, "registration_url"),
+            "reply_url": self._course_reply_url(course),
             "detail_url": normalize_course_detail_url(self._course_value(course, "detail_url")),
         }
+
+    @staticmethod
+    def _pain_topics_from_profile(profile: Dict[str, Any]) -> List[str]:
+        pain_points = {str(p) for p in profile.get("pain_points", []) if p}
+        topics: List[str] = []
+        for rule in PAIN_POINT_RULES:
+            if str(rule["tag"]) in pain_points and str(rule["topic"]) not in topics:
+                topics.append(str(rule["topic"]))
+        return topics
+
+    def _score_course_for_profile(
+        self,
+        course: Any,
+        profile: Dict[str, Any],
+    ) -> tuple[int, List[str]]:
+        score = 0
+        reasons: List[str] = []
+        age_groups = self._profile_age_groups(profile)
+        course_age_groups = self._course_values(course, "age_groups") or [self._course_value(course, "age_group")]
+        if age_groups and any(age in course_age_groups for age in age_groups):
+            score += 4
+            reasons.append("孩子年齡吻合")
+
+        course_topic = self._course_value(course, "topic")
+        profile_topic = str(profile.get("topic", ""))
+        pain_reasons = self._course_pain_reasons(course, [
+            str(p) for p in profile.get("pain_points", []) if p
+        ])
+        if pain_reasons:
+            score += 4
+            reasons.extend(pain_reasons[:2])
+        elif profile_topic and course_topic == profile_topic:
+            score += 3
+            reasons.append(f"主題符合「{profile_topic}」")
+
+        profile_target = str(profile.get("target", ""))
+        if profile_target and self._course_value(course, "target") == profile_target:
+            score += 2
+            reasons.append(f"對象是{profile_target}")
+
+        return score, reasons
+
+    def _rank_courses_for_profile(
+        self,
+        courses: List[Any],
+        profile: Dict[str, Any],
+        require_pain_match: bool = False,
+    ) -> List[Any]:
+        scored = []
+        pain_points = [str(p) for p in profile.get("pain_points", []) if p]
+        for course in courses:
+            pain_reasons = self._course_pain_reasons(course, pain_points)
+            if require_pain_match and not pain_reasons:
+                continue
+            score, reasons = self._score_course_for_profile(course, profile)
+            if score <= 0:
+                continue
+            scored.append((score, len(pain_reasons), reasons, course))
+        scored.sort(key=lambda item: (item[0], item[1]), reverse=True)
+        return [course for _, _, _, course in scored]
+
+    def get_proactive_matches(
+        self,
+        parent_limit: int = 100,
+        courses_per_parent: int = 3,
+    ) -> List[Dict[str, Any]]:
+        """Draft proactive course matches from stored parent memories."""
+        course_source = self._get_course_source()
+        if not course_source:
+            return []
+
+        courses = self._fetch_courses(course_source, include_details=True)
+        parents = self._memory.iter_parent_profiles(limit=parent_limit)
+        results: List[Dict[str, Any]] = []
+        for parent in parents:
+            profile = parent.get("profile", {})
+            if not self._profile_has_signal(profile):
+                continue
+            scored = []
+            for course in courses:
+                if profile.get("pain_points") and not self._course_pain_reasons(
+                    course,
+                    [str(p) for p in profile.get("pain_points", []) if p],
+                ):
+                    continue
+                score, reasons = self._score_course_for_profile(course, profile)
+                if score <= 0:
+                    continue
+                scored.append((score, reasons, course))
+            scored.sort(key=lambda item: item[0], reverse=True)
+            matches = [
+                {
+                    "score": score,
+                    "reasons": reasons,
+                    "course": self._course_summary_for_llm(course, index),
+                }
+                for index, (score, reasons, course)
+                in enumerate(scored[:courses_per_parent], 1)
+            ]
+            if matches:
+                results.append({
+                    "phone": parent["phone"],
+                    "conversation": parent["conversation"],
+                    "profile": profile,
+                    "matches": matches,
+                })
+        return results
 
     def _llm_cache_key(
         self,
@@ -744,6 +1099,7 @@ class WhatsAppHandler:
                 "age_groups": self._profile_age_groups(profile),
                 "target": profile.get("target", ""),
                 "topic": profile.get("topic", ""),
+                "pain_points": profile.get("pain_points", []),
             },
             "candidates": candidate_payload,
         }
@@ -843,19 +1199,39 @@ class WhatsAppHandler:
 
         try:
             requested_ages = self._profile_age_groups(profile)
-            courses = self._fetch_courses(course_source, age_group=requested_ages)
+            courses = self._fetch_courses(
+                course_source,
+                age_group=requested_ages,
+                include_details=True,
+            )
             filtered = self._filter_courses(
                 courses,
                 requested_ages,
                 profile.get("target", ""),
-                profile.get("topic", ""),
+                self._topic_for_exact_filter(profile),
             )
+            if profile.get("pain_points"):
+                ranked = self._rank_courses_for_profile(
+                    filtered,
+                    profile,
+                    require_pain_match=True,
+                )
+                if ranked:
+                    filtered = ranked
+                else:
+                    filtered = []
             if not filtered:
                 age_group = requested_ages
                 has_secondary_filter = bool(profile.get("target") or profile.get("topic"))
-                if age_group and has_secondary_filter:
+                if age_group and has_secondary_filter and not profile.get("pain_points"):
                     filtered = self._filter_courses(courses, age_group=age_group)
                 if not filtered:
+                    self._memory.add_agent_flag(
+                        from_number,
+                        "no_match",
+                        "LLM 推薦前沒有符合家長記憶的候選課程",
+                        {"profile": profile},
+                    )
                     return self._no_match_text(profile, courses)
 
             candidates = filtered[:8]
@@ -908,8 +1284,11 @@ class WhatsAppHandler:
                         "功課、翻譯或任何無關內容，只能請對方改問家長學堂課程，"
                         "不可順便回答無關問題。"
                         "只能根據候選課程回答，不可創造課程、日期、名額或連結。"
+                        "推薦理由要優先看候選課程的 summary 是否回應家長痛點，"
+                        "不要只看課程名稱。"
                         "最多推薦 3 個課程。每個推薦要有一句人話理由。"
-                        "每個推薦都要直接貼上候選課程提供的 detail_url 報名連結。"
+                        "每個推薦都要直接貼上候選課程提供的 reply_url；"
+                        "如果沒有 reply_url 才用 detail_url。"
                         "不要叫用戶再回覆「詳情1」才看連結。"
                         "如果資料不足，只問 1 個最關鍵問題。"
                         "用繁體中文，口吻自然、簡短、像真人助手，不要像公告。"
@@ -943,7 +1322,7 @@ class WhatsAppHandler:
         profile: Dict[str, Any],
         user_text: str = "",
     ) -> str:
-        if not self._profile_has_signal(profile):
+        if not self._profile_has_signal(profile) or not self._profile_ready_for_recommendation(profile):
             return self._onboarding_text(profile)
 
         llm_reply = self._get_llm_recommendation_text(from_number, user_text, profile)
@@ -957,6 +1336,7 @@ class WhatsAppHandler:
             topic=profile.get("topic", ""),
             page=1,
             agentic=True,
+            profile=profile,
         )
 
     def _get_course_detail_text(self, from_number: str, item_number: int) -> str:
@@ -973,7 +1353,7 @@ class WhatsAppHandler:
         topic = self._course_value(c, "topic")
         target = self._course_value(c, "target")
         status = self._course_value(c, "status")
-        link = normalize_course_detail_url(self._course_value(c, "detail_url"))
+        link = self._course_reply_url(c)
         lines = [f"🔎 *{title}*"]
         if date_str:
             lines.append(f"📅 {date_str}")
@@ -1015,7 +1395,10 @@ class WhatsAppHandler:
             self._reply(from_number, reply)
             return
 
-        if self._is_off_topic_request(text) or self._is_out_of_scope_request(text):
+        if (
+            (self._is_off_topic_request(text) and not self._has_parent_pain_signal(text))
+            or self._is_out_of_scope_request(text)
+        ):
             self._reply(from_number, self._off_topic_text())
             return
 
@@ -1023,11 +1406,12 @@ class WhatsAppHandler:
         age_groups = detect_age_groups(text)
         target = self._detect_positive_option(text, TARGETS)
         topic = self._detect_positive_option(text, TOPICS)
+        pain_points = detect_pain_points(text)
         page_request = self._parse_page_request(text)
         detail_request = self._parse_detail_request(text)
         if detail_request is not None:
             reply = self._get_course_detail_text(from_number, detail_request)
-        elif age_groups or target or topic:
+        elif age_groups or target or topic or pain_points:
             reply = self._get_agentic_recommendation_text(from_number, profile, text)
         elif page_request is not None:
             if from_number not in self._last_queries:
@@ -1050,6 +1434,7 @@ class WhatsAppHandler:
                 topic=str(query.get("topic", "")),
                 page=int(query.get("page", 1)),
                 agentic=bool(query.get("age_group") or query.get("target") or query.get("topic")),
+                profile=profile,
             )
         elif self._is_all_courses_request(text):
             reply = self._get_courses_text(from_number=from_number, page=1)
@@ -1075,6 +1460,12 @@ class WhatsAppHandler:
                 "有什麼可以幫你的嗎？"
             )
         else:
+            self._memory.add_agent_flag(
+                from_number,
+                "uncertain",
+                "AI 未能理解家長訊息，需要人工檢視或補充提示",
+                {"message": text.strip()[:300]},
+            )
             reply = self._unknown_text()
 
         self._reply(from_number, reply)

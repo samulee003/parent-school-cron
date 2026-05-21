@@ -126,8 +126,8 @@ class WhatsAppHandlerTests(unittest.TestCase):
         handler._handle_text_message("85360000000", "課程")
 
         self.assertEqual(sent[0][0], "85360000000")
-        self.assertIn("我先幫你縮窄", sent[0][1])
-        self.assertIn("小朋友1歲", sent[0][1])
+        self.assertIn("簡短訪談", sent[0][1])
+        self.assertIn("孩子年齡", sent[0][1])
         self.assertNotIn("嬰幼繪本氹氹轉", sent[0][1])
 
     def test_all_courses_returns_compact_course_objects_with_links(self):
@@ -573,7 +573,7 @@ class WhatsAppHandlerTests(unittest.TestCase):
         self.assertEqual([m["direction"] for m in messages], ["inbound", "outbound"])
         self.assertEqual([m["source"] for m in messages], ["parent", "ai"])
         self.assertEqual(messages[0]["body"], "課程")
-        self.assertIn("我先幫你縮窄", messages[1]["body"])
+        self.assertIn("簡短訪談", messages[1]["body"])
         conversations = handler._memory.list_conversations()
         self.assertEqual(conversations[0]["phone"], "85360000000")
         self.assertEqual(conversations[0]["status"], "ai")
@@ -589,6 +589,42 @@ class WhatsAppHandlerTests(unittest.TestCase):
         self.assertEqual(len(messages), 1)
         self.assertEqual(messages[0]["direction"], "inbound")
         self.assertEqual(messages[0]["source"], "parent")
+
+    def test_unknown_message_creates_uncertain_flag(self):
+        handler, sent = self.make_handler()
+
+        handler._handle_text_message("85360000000", "唔該你睇下")
+
+        self.assertIn("未能轉成課程條件", sent[0][1])
+        flags = handler._memory.list_agent_flags()
+        self.assertEqual(flags[0]["flag_type"], "uncertain")
+        self.assertEqual(flags[0]["phone"], "85360000000")
+
+    def test_no_match_creates_queue_flag(self):
+        courses = [
+            Course(
+                id="c1",
+                name="嬰幼親子活動",
+                date="2026/06/20 星期六 15:00-16:00",
+                date_parsed=None,
+                age_group="0-2歲",
+                age_groups=["0-2歲"],
+                topic="家庭關係",
+                target="親子",
+                status="報名中",
+                detail_url="https://example.test/course/c1",
+            )
+        ]
+        handler = WhatsAppHandler()
+        handler._get_bot = lambda: type("Bot", (), {"scraper": FakeCrawler(courses)})()
+        sent = []
+        handler._send_text = lambda to, text: sent.append((to, text)) or True
+
+        handler._handle_text_message("85360000000", "孩子13歲，最近情緒壓力大")
+
+        self.assertIn("暫時沒有", sent[0][1])
+        flags = handler._memory.list_agent_flags()
+        self.assertEqual(flags[0]["flag_type"], "no_match")
 
     def test_duplicate_whatsapp_message_id_is_processed_once(self):
         handler, sent = self.make_handler()
@@ -671,6 +707,98 @@ class WhatsAppHandlerTests(unittest.TestCase):
         self.assertIn("為什麼推薦", sent[0][1])
         self.assertIn("https://example.test/course/c1", sent[0][1])
         self.assertNotIn("青少年親子溝通工作坊", sent[0][1])
+
+    def test_parent_pain_point_is_remembered_and_mapped_to_topic(self):
+        courses = [
+            Course(
+                id="c-health",
+                name="健康情緒與青少年同行",
+                date="2026/05/31 星期日 10:30-12:00",
+                date_parsed=None,
+                age_group="13-18歲",
+                age_groups=["13-18歲"],
+                topic="身心健康",
+                target="家長",
+                status="報名中",
+                detail_url="https://example.test/course/health",
+            ),
+            Course(
+                id="c-social",
+                name="青少年社交工作坊",
+                date="2026/06/01 星期一 10:30-12:00",
+                date_parsed=None,
+                age_group="13-18歲",
+                age_groups=["13-18歲"],
+                topic="社會人際關係",
+                target="家長",
+                status="報名中",
+                detail_url="https://example.test/course/social",
+            ),
+        ]
+        handler = WhatsAppHandler()
+        handler._get_bot = lambda: type("Bot", (), {"scraper": FakeCrawler(courses)})()
+        sent = []
+        handler._send_text = lambda to, text: sent.append((to, text)) or True
+
+        handler._handle_text_message("85360000000", "孩子13歲，最近情緒壓力大")
+
+        self.assertIn("健康情緒與青少年同行", sent[0][1])
+        self.assertNotIn("青少年社交工作坊", sent[0][1])
+        profile = handler._load_profile("85360000000")
+        self.assertEqual(profile["topic"], "身心健康")
+        self.assertIn("情緒壓力", profile["pain_points"])
+        self.assertIn("情緒壓力", handler._memory.get_conversation("85360000000")["tags"])
+
+    def test_parent_pain_point_can_match_course_outline_not_only_title_or_topic(self):
+        courses = [
+            Course(
+                id="c-outline",
+                name="青少年同行工作坊",
+                date="2026/05/31 星期日 10:30-12:00",
+                date_parsed=None,
+                age_group="13-18歲",
+                age_groups=["13-18歲"],
+                topic="家庭關係",
+                target="家長",
+                status="報名中",
+                detail_url="https://example.test/course/outline",
+                summary="覺察面對青少年壓力、焦慮與憤怒，學習在親子衝突後真誠對話。",
+            ),
+            Course(
+                id="c-unrelated",
+                name="青少年生活講座",
+                date="2026/06/01 星期一 10:30-12:00",
+                date_parsed=None,
+                age_group="13-18歲",
+                age_groups=["13-18歲"],
+                topic="生活照顧",
+                target="家長",
+                status="報名中",
+                detail_url="https://example.test/course/life",
+                summary="整理生活作息與日常照顧安排。",
+            ),
+        ]
+        handler = WhatsAppHandler()
+        handler._get_bot = lambda: type("Bot", (), {"scraper": FakeCrawler(courses)})()
+        sent = []
+        handler._send_text = lambda to, text: sent.append((to, text)) or True
+
+        handler._handle_text_message("85360000000", "孩子13歲，最近情緒壓力大")
+
+        self.assertIn("青少年同行工作坊", sent[0][1])
+        self.assertIn("大綱回應", sent[0][1])
+        self.assertNotIn("青少年生活講座", sent[0][1])
+
+    def test_pain_point_without_age_turns_into_short_interview(self):
+        handler, sent = self.make_handler()
+
+        handler._handle_text_message("85360000000", "孩子最近做功課很拖拉")
+
+        self.assertIn("孩子年齡", sent[0][1])
+        self.assertNotIn("只協助查詢和推薦", sent[0][1])
+        profile = handler._load_profile("85360000000")
+        self.assertEqual(profile["topic"], "學習與成就感")
+        self.assertIn("學習動機", profile["pain_points"])
 
     def test_age_query_uses_age_specific_source_not_only_open_list(self):
         handler = WhatsAppHandler()
@@ -877,6 +1005,17 @@ class WhatsAppHandlerTests(unittest.TestCase):
             self.assertEqual(len(detail["messages"]), 2)
             self.assertEqual(detail["conversation"]["status"], "ai")
 
+            updated = asyncio.run(api_server.api_whatsapp_update_conversation(
+                "85360000000",
+                api_server.ConversationUpdateRequest(
+                    tags=["高關注", "情緒壓力"],
+                    notes="需要留意青少年情緒",
+                ),
+                secret="admin-secret",
+            ))
+            self.assertIn("高關注", updated["conversation"]["tags"])
+            self.assertEqual(updated["conversation"]["notes"], "需要留意青少年情緒")
+
             takeover = asyncio.run(api_server.api_whatsapp_takeover("85360000000", secret="admin-secret"))
             self.assertEqual(takeover["conversation"]["status"], "human")
 
@@ -891,6 +1030,52 @@ class WhatsAppHandlerTests(unittest.TestCase):
 
             resumed = asyncio.run(api_server.api_whatsapp_resume_ai("85360000000", secret="admin-secret"))
             self.assertEqual(resumed["conversation"]["status"], "ai")
+        finally:
+            api_server.wa_handler = old_handler
+            api_server.wa_memory = old_memory
+            if old_admin is None:
+                os.environ.pop("ADMIN_SECRET", None)
+            else:
+                os.environ["ADMIN_SECRET"] = old_admin
+
+    def test_admin_flags_and_proactive_matches(self):
+        courses = [
+            Course(
+                id="c-health",
+                name="健康情緒與青少年同行",
+                date="2026/05/31 星期日 10:30-12:00",
+                date_parsed=None,
+                age_group="13-18歲",
+                age_groups=["13-18歲"],
+                topic="身心健康",
+                target="家長",
+                status="報名中",
+                detail_url="https://example.test/course/health",
+            )
+        ]
+        handler = WhatsAppHandler()
+        handler._get_bot = lambda: type("Bot", (), {"scraper": FakeCrawler(courses)})()
+        handler._send_text = lambda to, text: True
+        handler._handle_text_message("85360000000", "孩子13歲，最近情緒壓力大")
+        flag_id = handler._memory.add_agent_flag("85360000000", "handoff_needed", "想人工跟進")
+
+        old_admin = os.environ.get("ADMIN_SECRET")
+        old_handler = api_server.wa_handler
+        old_memory = api_server.wa_memory
+        os.environ["ADMIN_SECRET"] = "admin-secret"
+        api_server.wa_handler = handler
+        api_server.wa_memory = handler._memory
+        try:
+            flags = asyncio.run(api_server.api_whatsapp_flags(secret="admin-secret"))
+            self.assertGreaterEqual(flags["total"], 1)
+
+            resolved = asyncio.run(api_server.api_whatsapp_resolve_flag(flag_id, secret="admin-secret"))
+            self.assertTrue(resolved["success"])
+
+            matches = asyncio.run(api_server.api_whatsapp_proactive_matches(secret="admin-secret"))
+            self.assertEqual(matches["total"], 1)
+            self.assertEqual(matches["matches"][0]["matches"][0]["course"]["name"], "健康情緒與青少年同行")
+            self.assertIn("孩子年齡吻合", matches["matches"][0]["matches"][0]["reasons"])
         finally:
             api_server.wa_handler = old_handler
             api_server.wa_memory = old_memory

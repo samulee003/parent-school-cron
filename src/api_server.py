@@ -131,6 +131,12 @@ class AdminMessageRequest(BaseModel):
     body: str
 
 
+class ConversationUpdateRequest(BaseModel):
+    display_name: str = ""
+    tags: list[str] = []
+    notes: str = ""
+
+
 # ============== FastAPI 應用 ==============
 
 app = FastAPI(
@@ -356,7 +362,7 @@ async def admin_dashboard(secret: str = ""):
     body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: var(--ink); background: var(--bg); }
     header { height: 52px; display: flex; align-items: center; justify-content: space-between; padding: 0 18px; border-bottom: 1px solid var(--line); background: #fff; }
     h1 { font-size: 18px; margin: 0; font-weight: 700; }
-    main { display: grid; grid-template-columns: 300px minmax(360px, 1fr) 280px; min-height: calc(100vh - 52px); }
+    main { display: grid; grid-template-columns: 300px minmax(360px, 1fr) 340px; min-height: calc(100vh - 52px); }
     aside, section { border-right: 1px solid var(--line); background: #fff; min-width: 0; }
     aside:last-child { border-right: 0; }
     .toolbar { padding: 12px; border-bottom: 1px solid var(--line); display: flex; gap: 8px; align-items: center; }
@@ -382,6 +388,9 @@ async def admin_dashboard(secret: str = ""):
     .sidebody { padding: 14px; display: grid; gap: 12px; }
     .kv { border-bottom: 1px solid var(--line); padding-bottom: 10px; }
     .label { color: var(--muted); font-size: 12px; margin-bottom: 4px; }
+    .mini { color: var(--muted); font-size: 12px; line-height: 1.4; }
+    .flag, .match { border: 1px solid var(--line); border-radius: 6px; padding: 8px; margin-top: 8px; background: #fff; }
+    .match strong { display: block; margin-bottom: 4px; }
     pre { margin: 0; white-space: pre-wrap; word-break: break-word; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; background: #f4f5f2; padding: 10px; border-radius: 6px; }
     @media (max-width: 900px) { main { grid-template-columns: 1fr; } aside, section { min-height: 260px; border-right: 0; border-bottom: 1px solid var(--line); } .messages { height: 360px; } }
   </style>
@@ -394,6 +403,10 @@ async def admin_dashboard(secret: str = ""):
   <main>
     <aside>
       <div class="toolbar"><input id="search" placeholder="搜尋電話或訊息" oninput="renderList()"></div>
+      <div class="toolbar">
+        <button onclick="loadFlags()">不確定隊列</button>
+        <button onclick="loadMatches()">主動匹配</button>
+      </div>
       <div id="list" class="list"></div>
     </aside>
     <section>
@@ -411,8 +424,19 @@ async def admin_dashboard(secret: str = ""):
           <button class="warn" onclick="takeover()">人工接手</button>
           <button onclick="resumeAi()">恢復 AI</button>
         </div>
+        <div class="kv">
+          <div class="label">家長標籤</div>
+          <input id="tags" placeholder="例：情緒壓力, 青少年, 高關注">
+        </div>
+        <div class="kv">
+          <div class="label">備註</div>
+          <textarea id="notes" placeholder="只給管理員看的備註"></textarea>
+          <button onclick="saveMeta()">儲存標籤/備註</button>
+        </div>
         <div class="kv"><div class="label">記憶</div><pre id="profile">{}</pre></div>
         <div class="kv"><div class="label">上次查詢</div><pre id="lastQuery">{}</pre></div>
+        <div class="kv"><div class="label">不確定隊列</div><div id="flags" class="mini">尚未載入</div></div>
+        <div class="kv"><div class="label">主動匹配草稿</div><div id="matches" class="mini">尚未產生</div></div>
       </div>
     </aside>
   </main>
@@ -457,6 +481,8 @@ async def admin_dashboard(secret: str = ""):
       const data = await api("/api/whatsapp/conversations/" + encodeURIComponent(phone));
       document.getElementById("chatTitle").textContent = phone;
       document.getElementById("status").textContent = data.conversation.status === "human" ? "人工接手中" : "AI 自動回覆";
+      document.getElementById("tags").value = (data.conversation.tags || []).join(", ");
+      document.getElementById("notes").value = data.conversation.notes || "";
       document.getElementById("profile").textContent = JSON.stringify(data.profile || {}, null, 2);
       document.getElementById("lastQuery").textContent = JSON.stringify(data.last_query || {}, null, 2);
       document.getElementById("messages").innerHTML = (data.messages || []).map(m => `
@@ -464,6 +490,16 @@ async def admin_dashboard(secret: str = ""):
           <div class="meta">${esc(m.source)} · ${esc(m.created_at)}</div>${esc(m.body)}
         </div>`).join("");
       renderList();
+    }
+    async function saveMeta() {
+      if (!currentPhone) return;
+      const tags = document.getElementById("tags").value.split(",").map(t => t.trim()).filter(Boolean);
+      const notes = document.getElementById("notes").value;
+      await api("/api/whatsapp/conversations/" + encodeURIComponent(currentPhone), {
+        method: "POST",
+        body: JSON.stringify({tags, notes})
+      });
+      await loadConversations();
     }
     async function takeover() {
       if (!currentPhone) return;
@@ -484,6 +520,34 @@ async def admin_dashboard(secret: str = ""):
       });
       document.getElementById("reply").value = "";
       await loadConversations();
+    }
+    async function loadFlags() {
+      const data = await api("/api/whatsapp/flags");
+      const flags = data.flags || [];
+      document.getElementById("flags").innerHTML = flags.length ? flags.map(f => `
+        <div class="flag">
+          <strong>${esc(f.flag_type)} · ${esc(f.phone)}</strong>
+          <div>${esc(f.summary)}</div>
+          <button onclick="resolveFlag(${Number(f.id)})">標記已處理</button>
+        </div>`).join("") : "目前沒有待處理項目";
+    }
+    async function resolveFlag(id) {
+      await api("/api/whatsapp/flags/" + id + "/resolve", {method: "POST"});
+      await loadFlags();
+    }
+    async function loadMatches() {
+      const data = await api("/api/whatsapp/proactive-matches");
+      const groups = data.matches || [];
+      document.getElementById("matches").innerHTML = groups.length ? groups.map(g => `
+        <div class="match">
+          <strong>${esc(g.phone)}</strong>
+          <div class="mini">${esc((g.profile.pain_points || []).join("、"))}</div>
+          ${(g.matches || []).map(m => `<div style="margin-top:8px">
+            <strong>${esc(m.course.name)}</strong>
+            <div>${esc((m.reasons || []).join("、"))}</div>
+            <div class="mini">${esc(m.course.date || "")}</div>
+          </div>`).join("")}
+        </div>`).join("") : "目前沒有足夠記憶可主動匹配";
     }
     loadConversations().catch(err => alert(err.message));
   </script>
@@ -511,6 +575,23 @@ async def api_whatsapp_conversation(phone: str, secret: str = "", limit: int = 1
         "last_query": store.get_last_query(phone),
         "messages": store.get_messages(phone, limit=limit),
     }
+
+
+@app.post("/api/whatsapp/conversations/{phone}")
+async def api_whatsapp_update_conversation(
+    phone: str,
+    payload: ConversationUpdateRequest,
+    secret: str = "",
+):
+    """Update operator-only labels and notes for a WhatsApp parent."""
+    require_secret(secret, ("ADMIN_SECRET",), "Admin")
+    conversation = get_wa_memory_store().update_conversation(
+        phone,
+        display_name=payload.display_name or None,
+        tags=payload.tags,
+        notes=payload.notes,
+    )
+    return {"success": True, "conversation": conversation}
 
 
 @app.post("/api/whatsapp/conversations/{phone}/takeover")
@@ -543,6 +624,44 @@ async def api_whatsapp_admin_message(
     if not handler.send_admin_message(phone, payload.body):
         raise HTTPException(status_code=502, detail="WhatsApp message failed")
     return {"success": True}
+
+
+@app.get("/api/whatsapp/flags")
+async def api_whatsapp_flags(secret: str = "", unresolved_only: bool = True, limit: int = 100):
+    """List AI uncertainty/no-match items for operator review."""
+    require_secret(secret, ("ADMIN_SECRET",), "Admin")
+    flags = get_wa_memory_store().list_agent_flags(
+        unresolved_only=unresolved_only,
+        limit=limit,
+    )
+    return {"total": len(flags), "flags": flags}
+
+
+@app.post("/api/whatsapp/flags/{flag_id}/resolve")
+async def api_whatsapp_resolve_flag(flag_id: int, secret: str = ""):
+    """Resolve an AI uncertainty/no-match queue item."""
+    require_secret(secret, ("ADMIN_SECRET",), "Admin")
+    return {
+        "success": get_wa_memory_store().resolve_agent_flag(flag_id),
+    }
+
+
+@app.get("/api/whatsapp/proactive-matches")
+async def api_whatsapp_proactive_matches(
+    secret: str = "",
+    parent_limit: int = 100,
+    courses_per_parent: int = 3,
+):
+    """Draft proactive course matches from stored family memories."""
+    require_secret(secret, ("ADMIN_SECRET",), "Admin")
+    handler = get_wa_handler()
+    if not handler:
+        raise HTTPException(status_code=500, detail="WhatsApp is not configured")
+    matches = handler.get_proactive_matches(
+        parent_limit=parent_limit,
+        courses_per_parent=courses_per_parent,
+    )
+    return {"total": len(matches), "matches": matches}
 
 
 # ============== 企業微信客服回調 ==============

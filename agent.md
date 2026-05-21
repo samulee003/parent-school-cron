@@ -33,7 +33,7 @@
 | `src/api_server.py` | FastAPI 入口、健康檢查、WhatsApp webhook、管理 API |
 | `src/whatsapp_handler.py` | WhatsApp 對話邏輯、課程推薦、DeepSeek guardrail、分頁、人工回覆 |
 | `src/whatsapp_memory.py` | SQLite 記憶、對話紀錄、接手狀態、去重、LLM 使用量、LLM 快取 |
-| `src/scraper.py` | DSEDJ 家長學堂課程抓取與解析 |
+| `src/scraper.py` | DSEDJ 家長學堂課程抓取、詳情頁大綱與報名連結解析 |
 | `tests/test_whatsapp_handler.py` | WhatsApp 對話、DeepSeek 成本守門、webhook 測試 |
 | `tests/test_scraper_classifier.py` | 爬蟲與分類測試 |
 | `README.md` | 使用者向說明 |
@@ -156,6 +156,10 @@ Default WhatsApp behavior:
 - If the user says `更多`, `下一頁`, or `還有嗎`, continue the last persisted query.
 - If the user asks for all courses, paginate compactly.
 - Always include official detail links in course replies.
+- When agentic recommendation is enabled, use course detail summaries for pain-point
+  matching. Do not match only by course name.
+- Prefer the real registration URL from the detail page when available; fall back to
+  the DSEDJ detail URL.
 - DSEDJ detail links must be normalized before sending. Avoid raw `&regstatus`
   in WhatsApp text because it can render as `®status`; use the helper in
   `src/scraper.py` so links become `?regstatus=...&msg_id=...&langsel=C`.
@@ -183,7 +187,11 @@ Before calling DeepSeek:
 - Reject long/noisy non-course messages locally before profile update or LLM calls.
 - Extract age and preference with deterministic rules.
 - Fetch candidate courses from DSEDJ.
+- Enrich candidates with detail-page summaries when the answer depends on pain
+  points or proactive matching.
 - Pass only candidate course data to DeepSeek.
+- The candidate payload includes `summary`, `registration_url`, and `reply_url`;
+  DeepSeek should reason from those fields and paste only provided URLs.
 - Enforce per-user and global daily limits.
 - Use cached replies where possible.
 
@@ -200,12 +208,15 @@ Already started:
 - Full inbound/outbound message transcript.
 - Human takeover / resume AI switch.
 - Manual reply from dashboard through WhatsApp Cloud API.
+- Notes/tags per parent.
+- AI uncertainty and no-match flags.
+- Proactive matching draft endpoint based on stored memories and course summaries.
 
 Next:
 
-- Notes/tags per parent.
-- AI uncertainty or no-match flag.
-- Proactive matching: new course -> match parent memories -> draft/push if allowed by WhatsApp rules.
+- Parent consent / allow-list for proactive pushes.
+- WhatsApp template handling for messages outside the 24-hour user window.
+- Push approval flow: new course -> match parent memories -> draft -> operator approve/send.
 
 When building this, prefer the existing FastAPI app and SQLite memory store first. Avoid adding a heavy frontend framework unless the dashboard grows beyond simple HTML/JS.
 

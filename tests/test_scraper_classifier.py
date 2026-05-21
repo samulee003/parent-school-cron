@@ -87,6 +87,84 @@ class ScraperClassifierTests(unittest.TestCase):
         self.assertIn("&msg_id=713092", fixed)
         self.assertNotIn("®status", fixed)
 
+    def test_fetch_courses_can_enrich_detail_outline_and_registration_link(self):
+        scraper = CourseScraper()
+
+        def fake_post(url, data, timeout):
+            return FakeResponse(
+                """
+                <html><body>
+                  <p>(1/1)</p>
+                  <table id="result">
+                    <tr><th>ID</th><th>名稱</th><th>日期</th><th>標籤</th><th>狀態</th></tr>
+                    <tr>
+                      <td title="713092"></td>
+                      <td>
+                        <a class="act_title" onclick="changeIframeURL('/webdsejspace/addon/allmain/msgfunc/Msg_funclink_parentacademy_page.jsp?msg_id=713092&regstatus=報名中&langsel=C')">健康情緒與青少年同行</a>
+                      </td>
+                      <td>2026/05/31 星期日 10:30-12:00</td>
+                      <td>
+                        <span class="badge">13-18歲</span>
+                        <span class="badge">身心健康</span>
+                        <span class="badge">家長</span>
+                      </td>
+                      <td data-status="報名中"></td>
+                    </tr>
+                  </table>
+                </body></html>
+                """
+            )
+
+        def fake_get(url, params, timeout):
+            self.assertIn("Msg_funcmain_parentacademy_page.jsp", url)
+            self.assertEqual(params["msg_id"], "713092")
+            return FakeResponse(
+                """
+                <div class="main">
+                  <h1>家長學堂——健康情緒與青少年同行</h1>
+                  <div>活動日期：2026/5/31 星期日 10:30-12:00</div>
+                  <ol>
+                    <li>覺察面對青少年疏離、叛逆時的無力感與憤怒。</li>
+                    <li>學習在親子衝突後進行真誠對話。</li>
+                  </ol>
+                  <p>報名連結：<a href="https://portal.dsedj.gov.mo/actregspace/gensystem/actreg/actreg/ActReg_view_page_2.jsp?search_id=36975&langsel=C">報名</a></p>
+                </div>
+                """
+            )
+
+        scraper.session.post = fake_post
+        scraper.session.get = fake_get
+
+        courses = scraper.fetch_courses(
+            status="",
+            include_details=True,
+            delay=0,
+            detail_delay=0,
+        )
+
+        self.assertEqual(len(courses), 1)
+        self.assertIn("親子衝突", courses[0].summary)
+        self.assertIn("actregspace", courses[0].registration_url)
+
+    def test_detail_parser_reads_direct_body_text_without_metadata(self):
+        scraper = CourseScraper()
+
+        detail = scraper._parse_course_detail_html(
+            """
+            <div class="main">
+              <h1>公共圖書館—嬰幼繪本</h1>
+              <div class="act_course_tag"><span>報名中</span><span>0-2歲</span></div>
+              <div>活動日期：2026/06/20 星期六 15:00-16:00</div>
+              描繪孩子成長過程中的里程碑，適合親子共讀。
+              <p>報名連結：<a href="https://activity.mo.gov.mo/activity-h5/activity-detail?activityId=1">報名</a></p>
+            </div>
+            """
+        )
+
+        self.assertEqual(detail["summary"], "描繪孩子成長過程中的里程碑，適合親子共讀。")
+        self.assertNotIn("活動日期", detail["summary"])
+        self.assertIn("activity.mo.gov.mo", detail["registration_url"])
+
     def test_classifier_groups_multi_age_course_into_every_matching_age(self):
         course = Course(
             id="c1",
