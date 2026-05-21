@@ -1010,11 +1010,15 @@ class WhatsAppHandlerTests(unittest.TestCase):
                 api_server.ConversationUpdateRequest(
                     tags=["高關注", "情緒壓力"],
                     notes="需要留意青少年情緒",
+                    consent_status="allowed",
+                    proactive_notes="可以推送青少年情緒課程",
                 ),
                 secret="admin-secret",
             ))
             self.assertIn("高關注", updated["conversation"]["tags"])
             self.assertEqual(updated["conversation"]["notes"], "需要留意青少年情緒")
+            self.assertEqual(updated["conversation"]["consent_status"], "allowed")
+            self.assertEqual(updated["conversation"]["proactive_notes"], "可以推送青少年情緒課程")
 
             takeover = asyncio.run(api_server.api_whatsapp_takeover("85360000000", secret="admin-secret"))
             self.assertEqual(takeover["conversation"]["status"], "human")
@@ -1076,6 +1080,75 @@ class WhatsAppHandlerTests(unittest.TestCase):
             self.assertEqual(matches["total"], 1)
             self.assertEqual(matches["matches"][0]["matches"][0]["course"]["name"], "健康情緒與青少年同行")
             self.assertIn("孩子年齡吻合", matches["matches"][0]["matches"][0]["reasons"])
+            self.assertIn("健康情緒與青少年同行", matches["matches"][0]["draft_text"])
+        finally:
+            api_server.wa_handler = old_handler
+            api_server.wa_memory = old_memory
+            if old_admin is None:
+                os.environ.pop("ADMIN_SECRET", None)
+            else:
+                os.environ["ADMIN_SECRET"] = old_admin
+
+    def test_proactive_matches_can_filter_to_consented_parents(self):
+        courses = [
+            Course(
+                id="c-health",
+                name="健康情緒與青少年同行",
+                date="2026/05/31 星期日 10:30-12:00",
+                date_parsed=None,
+                age_group="13-18歲",
+                age_groups=["13-18歲"],
+                topic="身心健康",
+                target="家長",
+                status="報名中",
+                detail_url="https://example.test/course/health",
+                summary="覺察青少年壓力與焦慮，學習親子衝突後真誠對話。",
+                registration_url="https://example.test/register/health",
+            )
+        ]
+        handler = WhatsAppHandler()
+        handler._get_bot = lambda: type("Bot", (), {"scraper": FakeCrawler(courses)})()
+        handler._send_text = lambda to, text: True
+        handler._handle_text_message("85360000000", "孩子13歲，最近情緒壓力大")
+        handler._handle_text_message("85360000001", "孩子13歲，最近情緒壓力大")
+        handler._memory.update_conversation("85360000000", consent_status="allowed")
+
+        matches = handler.get_proactive_matches(allowed_only=True)
+
+        self.assertEqual([m["phone"] for m in matches], ["85360000000"])
+        self.assertIn("健康情緒與青少年同行", matches[0]["draft_text"])
+        self.assertIn("https://example.test/register/health", matches[0]["draft_text"])
+
+    def test_proactive_send_requires_consent_then_sends_draft(self):
+        handler, sent = self.make_handler()
+        handler._handle_text_message("85360000000", "孩子13歲，最近情緒壓力大")
+
+        old_admin = os.environ.get("ADMIN_SECRET")
+        old_handler = api_server.wa_handler
+        old_memory = api_server.wa_memory
+        os.environ["ADMIN_SECRET"] = "admin-secret"
+        api_server.wa_handler = handler
+        api_server.wa_memory = handler._memory
+        try:
+            with self.assertRaises(HTTPException) as ctx:
+                asyncio.run(api_server.api_whatsapp_send_proactive_match(
+                    "85360000000",
+                    api_server.ProactiveSendRequest(body="這是主動推送草稿"),
+                    secret="admin-secret",
+                ))
+            self.assertEqual(ctx.exception.status_code, 409)
+
+            handler._memory.update_conversation("85360000000", consent_status="allowed")
+            result = asyncio.run(api_server.api_whatsapp_send_proactive_match(
+                "85360000000",
+                api_server.ProactiveSendRequest(body="這是主動推送草稿"),
+                secret="admin-secret",
+            ))
+
+            self.assertTrue(result["success"])
+            self.assertIn("這是主動推送草稿", sent[-1][1])
+            messages = handler._memory.get_messages("85360000000")
+            self.assertEqual(messages[-1]["source"], "admin")
         finally:
             api_server.wa_handler = old_handler
             api_server.wa_memory = old_memory

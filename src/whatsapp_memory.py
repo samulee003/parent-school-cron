@@ -77,8 +77,10 @@ class WhatsAppMemoryStore:
                         phone TEXT PRIMARY KEY,
                         display_name TEXT NOT NULL DEFAULT '',
                         status TEXT NOT NULL DEFAULT 'ai',
+                        consent_status TEXT NOT NULL DEFAULT 'unknown',
                         tags_json TEXT NOT NULL DEFAULT '[]',
                         notes TEXT NOT NULL DEFAULT '',
+                        proactive_notes TEXT NOT NULL DEFAULT '',
                         last_message_at TEXT NOT NULL DEFAULT '',
                         created_at TEXT NOT NULL,
                         updated_at TEXT NOT NULL
@@ -122,6 +124,18 @@ class WhatsAppMemoryStore:
                     "whatsapp_agent_flags",
                     "meta_json",
                     "TEXT NOT NULL DEFAULT '{}'",
+                )
+                self._ensure_column(
+                    conn,
+                    "whatsapp_conversations",
+                    "consent_status",
+                    "TEXT NOT NULL DEFAULT 'unknown'",
+                )
+                self._ensure_column(
+                    conn,
+                    "whatsapp_conversations",
+                    "proactive_notes",
+                    "TEXT NOT NULL DEFAULT ''",
                 )
                 conn.commit()
 
@@ -233,8 +247,10 @@ class WhatsAppMemoryStore:
                         c.phone,
                         c.display_name,
                         c.status,
+                        c.consent_status,
                         c.tags_json,
                         c.notes,
+                        c.proactive_notes,
                         c.last_message_at,
                         c.created_at,
                         c.updated_at,
@@ -264,7 +280,8 @@ class WhatsAppMemoryStore:
                 row = conn.execute(
                     """
                     SELECT phone, display_name, status, tags_json, notes,
-                           last_message_at, created_at, updated_at
+                           consent_status, proactive_notes, last_message_at,
+                           created_at, updated_at
                     FROM whatsapp_conversations
                     WHERE phone = ?
                     """,
@@ -278,6 +295,8 @@ class WhatsAppMemoryStore:
         display_name: str | None = None,
         tags: List[str] | None = None,
         notes: str | None = None,
+        consent_status: str | None = None,
+        proactive_notes: str | None = None,
     ) -> Dict[str, Any]:
         if not phone:
             return {}
@@ -299,6 +318,12 @@ class WhatsAppMemoryStore:
                 if notes is not None:
                     updates.append("notes = ?")
                     values.append(notes.strip())
+                if consent_status is not None:
+                    updates.append("consent_status = ?")
+                    values.append(self._clean_consent_status(consent_status))
+                if proactive_notes is not None:
+                    updates.append("proactive_notes = ?")
+                    values.append(proactive_notes.strip())
                 values.append(phone)
                 conn.execute(
                     f"""
@@ -312,7 +337,8 @@ class WhatsAppMemoryStore:
                 row = conn.execute(
                     """
                     SELECT phone, display_name, status, tags_json, notes,
-                           last_message_at, created_at, updated_at
+                           consent_status, proactive_notes, last_message_at,
+                           created_at, updated_at
                     FROM whatsapp_conversations
                     WHERE phone = ?
                     """,
@@ -364,7 +390,8 @@ class WhatsAppMemoryStore:
                 row = conn.execute(
                     """
                     SELECT phone, display_name, status, tags_json, notes,
-                           last_message_at, created_at, updated_at
+                           consent_status, proactive_notes, last_message_at,
+                           created_at, updated_at
                     FROM whatsapp_conversations
                     WHERE phone = ?
                     """,
@@ -618,14 +645,21 @@ class WhatsAppMemoryStore:
             clean.append(tag_text[:32])
         return clean[:20]
 
+    @staticmethod
+    def _clean_consent_status(status: str) -> str:
+        status_text = str(status or "unknown").strip().lower()
+        if status_text in {"allowed", "paused", "unknown"}:
+            return status_text
+        return "unknown"
+
     def _upsert_conversation(self, conn: sqlite3.Connection, phone: str, now: str) -> None:
         conn.execute(
             """
             INSERT INTO whatsapp_conversations (
-                phone, display_name, status, tags_json, notes,
-                last_message_at, created_at, updated_at
+                phone, display_name, status, consent_status, tags_json, notes,
+                proactive_notes, last_message_at, created_at, updated_at
             )
-            VALUES (?, '', 'ai', '[]', '', '', ?, ?)
+            VALUES (?, '', 'ai', 'unknown', '[]', '', '', '', ?, ?)
             ON CONFLICT(phone) DO UPDATE SET
                 updated_at=excluded.updated_at
             """,

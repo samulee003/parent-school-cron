@@ -1042,6 +1042,7 @@ class WhatsAppHandler:
         self,
         parent_limit: int = 100,
         courses_per_parent: int = 3,
+        allowed_only: bool = False,
     ) -> List[Dict[str, Any]]:
         """Draft proactive course matches from stored parent memories."""
         course_source = self._get_course_source()
@@ -1052,6 +1053,9 @@ class WhatsAppHandler:
         parents = self._memory.iter_parent_profiles(limit=parent_limit)
         results: List[Dict[str, Any]] = []
         for parent in parents:
+            conversation = parent.get("conversation", {})
+            if allowed_only and conversation.get("consent_status") != "allowed":
+                continue
             profile = parent.get("profile", {})
             if not self._profile_has_signal(profile):
                 continue
@@ -1079,11 +1083,43 @@ class WhatsAppHandler:
             if matches:
                 results.append({
                     "phone": parent["phone"],
-                    "conversation": parent["conversation"],
+                    "conversation": conversation,
                     "profile": profile,
                     "matches": matches,
+                    "draft_text": self._draft_proactive_match_text(profile, matches),
                 })
         return results
+
+    def _draft_proactive_match_text(
+        self,
+        profile: Dict[str, Any],
+        matches: List[Dict[str, Any]],
+    ) -> str:
+        """Build an operator-editable proactive WhatsApp draft."""
+        if not matches:
+            return ""
+
+        intro = "我看到有幾個可能貼近你情況的家長學堂課程，先幫你挑少量重點："
+        pain_points = "、".join([str(p) for p in profile.get("pain_points", []) if p][:2])
+        if pain_points:
+            intro = f"你之前提到「{pain_points}」，我看到有幾個可能貼近的家長學堂課程："
+
+        lines = [intro]
+        for index, match in enumerate(matches[:2], 1):
+            course = match.get("course", {})
+            reasons = "、".join(match.get("reasons", [])[:2])
+            title = str(course.get("name", "未命名課程"))
+            date_text = str(course.get("date", ""))
+            link = str(course.get("reply_url") or course.get("registration_url") or course.get("detail_url") or "")
+            lines.append(f"\n{index}. {title}")
+            if date_text:
+                lines.append(f"日期：{date_text}")
+            if reasons:
+                lines.append(f"原因：{reasons}")
+            if link:
+                lines.append(f"報名連結：{link}")
+        lines.append("\n如果不想再收到這類主動提醒，可以直接回覆：暫停推送。")
+        return "\n".join(lines)
 
     def _llm_cache_key(
         self,

@@ -135,6 +135,12 @@ class ConversationUpdateRequest(BaseModel):
     display_name: str = ""
     tags: list[str] = []
     notes: str = ""
+    consent_status: str = ""
+    proactive_notes: str = ""
+
+
+class ProactiveSendRequest(BaseModel):
+    body: str = ""
 
 
 # ============== FastAPI 應用 ==============
@@ -391,6 +397,7 @@ async def admin_dashboard(secret: str = ""):
     .mini { color: var(--muted); font-size: 12px; line-height: 1.4; }
     .flag, .match { border: 1px solid var(--line); border-radius: 6px; padding: 8px; margin-top: 8px; background: #fff; }
     .match strong { display: block; margin-bottom: 4px; }
+    .match textarea { min-height: 120px; margin-top: 8px; }
     pre { margin: 0; white-space: pre-wrap; word-break: break-word; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; background: #f4f5f2; padding: 10px; border-radius: 6px; }
     @media (max-width: 900px) { main { grid-template-columns: 1fr; } aside, section { min-height: 260px; border-right: 0; border-bottom: 1px solid var(--line); } .messages { height: 360px; } }
   </style>
@@ -431,7 +438,16 @@ async def admin_dashboard(secret: str = ""):
         <div class="kv">
           <div class="label">備註</div>
           <textarea id="notes" placeholder="只給管理員看的備註"></textarea>
-          <button onclick="saveMeta()">儲存標籤/備註</button>
+        </div>
+        <div class="kv">
+          <div class="label">主動推送同意</div>
+          <select id="consentStatus">
+            <option value="unknown">未確認</option>
+            <option value="allowed">同意主動推送</option>
+            <option value="paused">暫停主動推送</option>
+          </select>
+          <textarea id="proactiveNotes" placeholder="推送偏好或同意來源"></textarea>
+          <button onclick="saveMeta()">儲存標籤/備註/同意</button>
         </div>
         <div class="kv"><div class="label">記憶</div><pre id="profile">{}</pre></div>
         <div class="kv"><div class="label">上次查詢</div><pre id="lastQuery">{}</pre></div>
@@ -444,6 +460,7 @@ async def admin_dashboard(secret: str = ""):
     const secret = new URLSearchParams(location.search).get("secret") || "";
     let conversations = [];
     let currentPhone = "";
+    let matchDrafts = {};
 
     async function api(path, options = {}) {
       const sep = path.includes("?") ? "&" : "?";
@@ -474,6 +491,7 @@ async def admin_dashboard(secret: str = ""):
           <div class="phone">${esc(c.phone)}</div>
           <div class="latest">${esc(c.latest_message || "")}</div>
           <span class="pill ${c.status === "human" ? "human" : ""}">${c.status === "human" ? "人工接手" : "AI 自動"}</span>
+          <span class="pill">${c.consent_status === "allowed" ? "可推送" : c.consent_status === "paused" ? "暫停推送" : "未同意"}</span>
         </div>`).join("");
     }
     async function openChat(phone) {
@@ -483,6 +501,8 @@ async def admin_dashboard(secret: str = ""):
       document.getElementById("status").textContent = data.conversation.status === "human" ? "人工接手中" : "AI 自動回覆";
       document.getElementById("tags").value = (data.conversation.tags || []).join(", ");
       document.getElementById("notes").value = data.conversation.notes || "";
+      document.getElementById("consentStatus").value = data.conversation.consent_status || "unknown";
+      document.getElementById("proactiveNotes").value = data.conversation.proactive_notes || "";
       document.getElementById("profile").textContent = JSON.stringify(data.profile || {}, null, 2);
       document.getElementById("lastQuery").textContent = JSON.stringify(data.last_query || {}, null, 2);
       document.getElementById("messages").innerHTML = (data.messages || []).map(m => `
@@ -495,9 +515,11 @@ async def admin_dashboard(secret: str = ""):
       if (!currentPhone) return;
       const tags = document.getElementById("tags").value.split(",").map(t => t.trim()).filter(Boolean);
       const notes = document.getElementById("notes").value;
+      const consent_status = document.getElementById("consentStatus").value;
+      const proactive_notes = document.getElementById("proactiveNotes").value;
       await api("/api/whatsapp/conversations/" + encodeURIComponent(currentPhone), {
         method: "POST",
-        body: JSON.stringify({tags, notes})
+        body: JSON.stringify({tags, notes, consent_status, proactive_notes})
       });
       await loadConversations();
     }
@@ -538,16 +560,29 @@ async def admin_dashboard(secret: str = ""):
     async function loadMatches() {
       const data = await api("/api/whatsapp/proactive-matches");
       const groups = data.matches || [];
+      matchDrafts = {};
       document.getElementById("matches").innerHTML = groups.length ? groups.map(g => `
         <div class="match">
           <strong>${esc(g.phone)}</strong>
+          <div class="mini">${g.conversation.consent_status === "allowed" ? "已同意主動推送" : "未同意或已暫停"}</div>
           <div class="mini">${esc((g.profile.pain_points || []).join("、"))}</div>
           ${(g.matches || []).map(m => `<div style="margin-top:8px">
             <strong>${esc(m.course.name)}</strong>
             <div>${esc((m.reasons || []).join("、"))}</div>
             <div class="mini">${esc(m.course.date || "")}</div>
           </div>`).join("")}
+          <textarea id="draft-${esc(g.phone)}">${esc(g.draft_text || "")}</textarea>
+          <button onclick="sendDraft('${esc(g.phone)}')">發送草稿</button>
         </div>`).join("") : "目前沒有足夠記憶可主動匹配";
+    }
+    async function sendDraft(phone) {
+      const body = document.getElementById("draft-" + phone).value.trim();
+      if (!body) return;
+      await api("/api/whatsapp/proactive-matches/" + encodeURIComponent(phone) + "/send", {
+        method: "POST",
+        body: JSON.stringify({body})
+      });
+      await loadConversations();
     }
     loadConversations().catch(err => alert(err.message));
   </script>
@@ -590,6 +625,8 @@ async def api_whatsapp_update_conversation(
         display_name=payload.display_name or None,
         tags=payload.tags,
         notes=payload.notes,
+        consent_status=payload.consent_status or None,
+        proactive_notes=payload.proactive_notes or None,
     )
     return {"success": True, "conversation": conversation}
 
@@ -651,6 +688,7 @@ async def api_whatsapp_proactive_matches(
     secret: str = "",
     parent_limit: int = 100,
     courses_per_parent: int = 3,
+    allowed_only: bool = False,
 ):
     """Draft proactive course matches from stored family memories."""
     require_secret(secret, ("ADMIN_SECRET",), "Admin")
@@ -660,8 +698,35 @@ async def api_whatsapp_proactive_matches(
     matches = handler.get_proactive_matches(
         parent_limit=parent_limit,
         courses_per_parent=courses_per_parent,
+        allowed_only=allowed_only,
     )
     return {"total": len(matches), "matches": matches}
+
+
+@app.post("/api/whatsapp/proactive-matches/{phone}/send")
+async def api_whatsapp_send_proactive_match(
+    phone: str,
+    payload: ProactiveSendRequest,
+    secret: str = "",
+):
+    """Send an operator-approved proactive draft to a consented parent."""
+    require_secret(secret, ("ADMIN_SECRET",), "Admin")
+    store = get_wa_memory_store()
+    conversation = store.get_conversation(phone)
+    if conversation.get("consent_status") != "allowed":
+        raise HTTPException(
+            status_code=409,
+            detail="Parent has not consented to proactive messages",
+        )
+    handler = get_wa_handler()
+    if not handler:
+        raise HTTPException(status_code=500, detail="WhatsApp is not configured")
+    message = payload.body.strip()
+    if not message:
+        raise HTTPException(status_code=400, detail="Message body is required")
+    if not handler.send_admin_message(phone, message):
+        raise HTTPException(status_code=502, detail="WhatsApp message failed")
+    return {"success": True}
 
 
 # ============== 企業微信客服回調 ==============

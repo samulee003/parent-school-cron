@@ -24,6 +24,8 @@
 - 根目錄 `/` 是給 Meta / 家長看的公開 landing page，`HEAD /` 也會回 200。
 - 已開始 Agentic Admin MVP：記錄 inbound/outbound transcript、conversation status、人工接手/恢復 AI、人工回覆 API、受 `ADMIN_SECRET` 保護的 `/admin` 初版介面。
 - `/admin` 已有家長標籤、備註、不確定/無匹配隊列、主動匹配草稿。
+- `/admin` 已有主動推送同意狀態：`unknown` / `allowed` / `paused`。
+- 已有 operator approval loop：主動匹配產生草稿，只有 `allowed` 家長可以由管理台批准發送。
 
 家長入口：
 
@@ -55,7 +57,7 @@ python -B -m compileall src
 git diff --check
 ```
 
-最近一次已知測試數量：`54` 個 unittest 通過。
+最近一次已知測試數量：`56` 個 unittest 通過。
 
 2026-05-21 實站爬蟲驗證：
 
@@ -126,13 +128,15 @@ git diff --check
 - AI uncertainty/no-match flags.
 - Proactive match draft endpoint.
 - Course detail summaries and real registration links.
+- Proactive consent status and notes.
+- Operator-approved proactive draft send endpoint.
 - Legacy admin API: `/api/users`, `/api/push`, `/api/cron`.
 
 ### Does not exist yet
 
-- Parent consent / allow-list for proactive push.
-- Operator approval flow for proactive push drafts.
+- WhatsApp-side consent capture command or interview phrase.
 - WhatsApp template management for messages outside the 24-hour user window.
+- Persistent proactive draft queue/history beyond transcript records.
 
 ## Recommended Next Build
 
@@ -151,9 +155,9 @@ Already done in MVP:
 
 Next useful build:
 
-1. Add parent allow-list/consent status for proactive pushes.
-2. Add operator approval/send flow for proactive match drafts.
-3. Add WhatsApp template handling for outbound messages outside the 24-hour window.
+1. Add WhatsApp-side consent capture command or interview phrase.
+2. Add WhatsApp template handling for outbound messages outside the 24-hour window.
+3. Add persistent proactive draft queue/history beyond transcript records.
 4. Improve `/admin` auth beyond query-string secret before wider use.
 5. Add monitoring for DSEDJ HTML changes, especially detail-page parsing.
 
@@ -164,8 +168,10 @@ whatsapp_conversations
 - phone primary key
 - display_name
 - status: ai | human
+- consent_status: unknown | allowed | paused
 - tags_json
 - notes
+- proactive_notes
 - last_message_at
 - updated_at
 

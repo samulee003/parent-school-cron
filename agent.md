@@ -172,7 +172,7 @@ Supported memory:
 - `processed_whatsapp_messages`: webhook duplicate protection.
 - `llm_daily_usage`: per-user and global DeepSeek limits.
 - `llm_response_cache`: cost-saving cache for identical recommendation contexts.
-- `whatsapp_conversations`: parent conversation status, latest activity, notes/tags placeholders.
+- `whatsapp_conversations`: parent conversation status, latest activity, notes/tags, proactive consent status, proactive notes.
 - `whatsapp_messages`: inbound/outbound transcript for parent, AI, admin, and system messages.
 - `whatsapp_agent_flags`: placeholder table for no-match/uncertain/handoff flags.
 
@@ -211,12 +211,14 @@ Already started:
 - Notes/tags per parent.
 - AI uncertainty and no-match flags.
 - Proactive matching draft endpoint based on stored memories and course summaries.
+- Parent consent status for proactive pushes: `unknown`, `allowed`, `paused`.
+- Operator-approved proactive draft sending for parents with `allowed` consent.
 
 Next:
 
-- Parent consent / allow-list for proactive pushes.
 - WhatsApp template handling for messages outside the 24-hour user window.
-- Push approval flow: new course -> match parent memories -> draft -> operator approve/send.
+- Stronger proactive workflow: new course -> match parent memories -> review queue -> operator approve/send.
+- Consent capture in WhatsApp conversation, not only admin-side manual setting.
 
 When building this, prefer the existing FastAPI app and SQLite memory store first. Avoid adding a heavy frontend framework unless the dashboard grows beyond simple HTML/JS.
 
