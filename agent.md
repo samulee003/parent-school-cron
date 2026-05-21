@@ -213,12 +213,14 @@ Already started:
 - Proactive matching draft endpoint based on stored memories and course summaries.
 - Parent consent status for proactive pushes: `unknown`, `allowed`, `paused`.
 - Operator-approved proactive draft sending for parents with `allowed` consent.
+- WhatsApp-side consent capture: parents can reply `同意推送` / `同意收課程提醒`
+  or `暫停推送`.
 
 Next:
 
 - WhatsApp template handling for messages outside the 24-hour user window.
 - Stronger proactive workflow: new course -> match parent memories -> review queue -> operator approve/send.
-- Consent capture in WhatsApp conversation, not only admin-side manual setting.
+- Persistent proactive draft queue/history beyond transcript records.
 
 When building this, prefer the existing FastAPI app and SQLite memory store first. Avoid adding a heavy frontend framework unless the dashboard grows beyond simple HTML/JS.
 

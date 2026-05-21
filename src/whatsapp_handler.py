@@ -43,6 +43,14 @@ NEXT_PAGE_KEYWORDS = {
 ALL_COURSE_KEYWORDS = {"全部課程", "全部", "all"}
 RESET_KEYWORDS = {"重設", "重新設定", "reset"}
 PROFILE_KEYWORDS = {"我的偏好", "偏好", "設定", "狀態", "profile"}
+PROACTIVE_ALLOW_KEYWORDS = {
+    "同意收課程提醒", "同意收提醒", "同意推送", "可以推送",
+    "可以提醒", "開啟推送", "恢復推送", "接收推送", "收課程提醒",
+}
+PROACTIVE_PAUSE_KEYWORDS = {
+    "暫停推送", "暂停推送", "停止推送", "取消推送", "不要推送",
+    "不用推送", "不想收到", "唔好推送", "停止提醒", "暫停提醒", "暂停提醒",
+}
 NEGATION_WORDS = ("不要", "不用", "不想", "不是", "唔要", "唔係", "排除", "非")
 BARE_RECOMMENDATION_COMMANDS = {
     "推薦", "推介", "有推薦嗎", "有推介嗎", "有咩推薦", "有咩推介",
@@ -467,6 +475,31 @@ class WhatsAppHandler:
     @staticmethod
     def _normalize_command(text: str) -> str:
         return re.sub(r"[\s\?？!！。,.、，；;:：]+", "", text.strip().lower())
+
+    @staticmethod
+    def _detect_proactive_consent_status(text: str) -> str:
+        normalized = WhatsAppHandler._normalize_command(text)
+        if not normalized:
+            return ""
+        if any(keyword in normalized for keyword in PROACTIVE_PAUSE_KEYWORDS):
+            return "paused"
+        if any(keyword in normalized for keyword in PROACTIVE_ALLOW_KEYWORDS):
+            return "allowed"
+        return ""
+
+    @staticmethod
+    def _proactive_consent_text(status: str) -> str:
+        if status == "allowed":
+            return (
+                "已記住：你同意接收 *主動課程提醒*。\n\n"
+                "之後如果有貼近孩子年齡和你關心痛點的家長學堂課程，"
+                "我可以幫你留意。\n"
+                "任何時候回覆 *暫停推送*，就會停止主動提醒。"
+            )
+        return (
+            "已記住：暫停主動課程提醒。\n\n"
+            "我仍然可以即時幫你查課程；之後想恢復，可以回覆 *同意推送*。"
+        )
 
     @staticmethod
     def _parse_detail_request(text: str) -> Optional[int]:
@@ -1429,6 +1462,16 @@ class WhatsAppHandler:
                 "你可以直接補充，例如：*不要親子，要家長課*、*只要青少年*、*想身心健康*。"
             )
             self._reply(from_number, reply)
+            return
+
+        consent_status = self._detect_proactive_consent_status(text)
+        if consent_status:
+            self._memory.update_conversation(
+                from_number,
+                consent_status=consent_status,
+                proactive_notes=text.strip()[:180],
+            )
+            self._reply(from_number, self._proactive_consent_text(consent_status))
             return
 
         if (

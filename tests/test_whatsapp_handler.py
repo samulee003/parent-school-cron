@@ -590,6 +590,26 @@ class WhatsAppHandlerTests(unittest.TestCase):
         self.assertEqual(messages[0]["direction"], "inbound")
         self.assertEqual(messages[0]["source"], "parent")
 
+    def test_parent_can_allow_proactive_push_from_whatsapp(self):
+        handler, sent = self.make_handler()
+
+        handler._handle_text_message("85360000000", "我同意收課程提醒")
+
+        conversation = handler._memory.get_conversation("85360000000")
+        self.assertEqual(conversation["consent_status"], "allowed")
+        self.assertIn("主動課程提醒", sent[0][1])
+        self.assertIn("暫停推送", sent[0][1])
+
+    def test_parent_can_pause_proactive_push_from_whatsapp(self):
+        handler, sent = self.make_handler()
+        handler._memory.update_conversation("85360000000", consent_status="allowed")
+
+        handler._handle_text_message("85360000000", "暫停推送")
+
+        conversation = handler._memory.get_conversation("85360000000")
+        self.assertEqual(conversation["consent_status"], "paused")
+        self.assertIn("暫停", sent[0][1])
+
     def test_unknown_message_creates_uncertain_flag(self):
         handler, sent = self.make_handler()
 
