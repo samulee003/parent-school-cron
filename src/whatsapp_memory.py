@@ -1,5 +1,6 @@
 """Persistent WhatsApp conversation memory."""
 
+import hashlib
 import json
 import logging
 import os
@@ -119,6 +120,41 @@ class WhatsAppMemoryStore:
                     )
                     """
                 )
+                conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS whatsapp_proactive_drafts (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        phone TEXT NOT NULL,
+                        status TEXT NOT NULL DEFAULT 'draft',
+                        draft_text TEXT NOT NULL,
+                        original_text TEXT NOT NULL DEFAULT '',
+                        sent_text TEXT NOT NULL DEFAULT '',
+                        matches_json TEXT NOT NULL DEFAULT '[]',
+                        profile_json TEXT NOT NULL DEFAULT '{}',
+                        meta_json TEXT NOT NULL DEFAULT '{}',
+                        fingerprint TEXT NOT NULL DEFAULT '',
+                        error_text TEXT NOT NULL DEFAULT '',
+                        sent_message_type TEXT NOT NULL DEFAULT '',
+                        sent_at TEXT NOT NULL DEFAULT '',
+                        skipped_at TEXT NOT NULL DEFAULT '',
+                        failed_at TEXT NOT NULL DEFAULT '',
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL
+                    )
+                    """
+                )
+                conn.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS idx_whatsapp_proactive_drafts_status_updated
+                    ON whatsapp_proactive_drafts (status, updated_at)
+                    """
+                )
+                conn.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS idx_whatsapp_proactive_drafts_phone_status
+                    ON whatsapp_proactive_drafts (phone, status)
+                    """
+                )
                 self._ensure_column(
                     conn,
                     "whatsapp_agent_flags",
@@ -135,6 +171,18 @@ class WhatsAppMemoryStore:
                     conn,
                     "whatsapp_conversations",
                     "proactive_notes",
+                    "TEXT NOT NULL DEFAULT ''",
+                )
+                self._ensure_column(
+                    conn,
+                    "whatsapp_proactive_drafts",
+                    "original_text",
+                    "TEXT NOT NULL DEFAULT ''",
+                )
+                self._ensure_column(
+                    conn,
+                    "whatsapp_proactive_drafts",
+                    "sent_text",
                     "TEXT NOT NULL DEFAULT ''",
                 )
                 conn.commit()
@@ -468,6 +516,249 @@ class WhatsAppMemoryStore:
                 conn.commit()
                 return cursor.rowcount > 0
 
+    def save_proactive_draft(
+        self,
+        phone: str,
+        draft_text: str,
+        matches: List[Dict[str, Any]] | None = None,
+        profile: Dict[str, Any] | None = None,
+        meta: Dict[str, Any] | None = None,
+    ) -> Dict[str, Any]:
+        """Create a queued proactive draft, reusing the same open draft if present."""
+        if not phone or not draft_text.strip():
+            return {}
+
+        matches_payload = matches or []
+        profile_payload = profile or {}
+        meta_payload = meta or {}
+        fingerprint = self._proactive_draft_fingerprint(phone, matches_payload)
+        now = datetime.now().isoformat()
+        matches_json = json.dumps(matches_payload, ensure_ascii=False)
+        profile_json = json.dumps(profile_payload, ensure_ascii=False)
+        meta_json = json.dumps(meta_payload, ensure_ascii=False)
+
+        with self._lock:
+            with closing(sqlite3.connect(str(self.db_path))) as conn:
+                conn.row_factory = sqlite3.Row
+                self._upsert_conversation(conn, phone, now)
+                existing = conn.execute(
+                    """
+                    SELECT *
+                    FROM whatsapp_proactive_drafts
+                    WHERE phone = ? AND fingerprint = ? AND status = 'draft'
+                    ORDER BY id DESC
+                    LIMIT 1
+                    """,
+                    (phone, fingerprint),
+                ).fetchone()
+                if existing:
+                    conn.execute(
+                        """
+                        UPDATE whatsapp_proactive_drafts
+                        SET matches_json = ?, profile_json = ?, meta_json = ?,
+                            updated_at = ?
+                        WHERE id = ?
+                        """,
+                        (matches_json, profile_json, meta_json, now, existing["id"]),
+                    )
+                    conn.commit()
+                    return self.get_proactive_draft(int(existing["id"]))
+
+                cursor = conn.execute(
+                    """
+                    INSERT INTO whatsapp_proactive_drafts (
+                        phone, status, draft_text, original_text, sent_text,
+                        matches_json, profile_json, meta_json, fingerprint,
+                        error_text, sent_message_type,
+                        sent_at, skipped_at, failed_at, created_at, updated_at
+                    )
+                    VALUES (?, 'draft', ?, ?, '', ?, ?, ?, ?, '', '', '', '', '', ?, ?)
+                    """,
+                    (
+                        phone,
+                        draft_text.strip(),
+                        draft_text.strip(),
+                        matches_json,
+                        profile_json,
+                        meta_json,
+                        fingerprint,
+                        now,
+                        now,
+                    ),
+                )
+                conn.commit()
+                return self.get_proactive_draft(int(cursor.lastrowid or 0))
+
+    def list_proactive_drafts(
+        self,
+        status: str = "draft",
+        phone: str = "",
+        limit: int = 100,
+    ) -> List[Dict[str, Any]]:
+        limit = max(1, min(int(limit or 100), 300))
+        clauses: List[str] = []
+        values: List[Any] = []
+        clean_status = str(status or "draft").strip().lower()
+        if clean_status and clean_status != "all":
+            clauses.append("d.status = ?")
+            values.append(self._clean_draft_status(clean_status))
+        if phone:
+            clauses.append("d.phone = ?")
+            values.append(phone)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        values.append(limit)
+        with self._lock:
+            with closing(sqlite3.connect(str(self.db_path))) as conn:
+                conn.row_factory = sqlite3.Row
+                rows = conn.execute(
+                    f"""
+                    SELECT
+                        d.*,
+                        c.consent_status,
+                        c.status AS conversation_status,
+                        c.tags_json,
+                        c.notes,
+                        c.proactive_notes,
+                        c.last_message_at
+                    FROM whatsapp_proactive_drafts d
+                    LEFT JOIN whatsapp_conversations c ON c.phone = d.phone
+                    {where}
+                    ORDER BY d.updated_at DESC, d.id DESC
+                    LIMIT ?
+                    """,
+                    values,
+                ).fetchall()
+        return [self._draft_row_to_dict(row) for row in rows]
+
+    def get_proactive_draft(self, draft_id: int) -> Dict[str, Any]:
+        if not draft_id:
+            return {}
+        with self._lock:
+            with closing(sqlite3.connect(str(self.db_path))) as conn:
+                conn.row_factory = sqlite3.Row
+                row = conn.execute(
+                    """
+                    SELECT
+                        d.*,
+                        c.consent_status,
+                        c.status AS conversation_status,
+                        c.tags_json,
+                        c.notes,
+                        c.proactive_notes,
+                        c.last_message_at
+                    FROM whatsapp_proactive_drafts d
+                    LEFT JOIN whatsapp_conversations c ON c.phone = d.phone
+                    WHERE d.id = ?
+                    """,
+                    (draft_id,),
+                ).fetchone()
+        return self._draft_row_to_dict(row) if row else {}
+
+    def update_proactive_draft_body(
+        self,
+        draft_id: int,
+        draft_text: str,
+    ) -> Dict[str, Any]:
+        if not draft_id or not draft_text.strip():
+            return {}
+        now = datetime.now().isoformat()
+        with self._lock:
+            with closing(sqlite3.connect(str(self.db_path))) as conn:
+                cursor = conn.execute(
+                    """
+                    UPDATE whatsapp_proactive_drafts
+                    SET draft_text = ?, updated_at = ?
+                    WHERE id = ? AND status = 'draft'
+                    """,
+                    (draft_text.strip(), now, draft_id),
+                )
+                conn.commit()
+                if cursor.rowcount <= 0:
+                    return {}
+        return self.get_proactive_draft(draft_id)
+
+    def claim_proactive_draft_for_send(
+        self,
+        draft_id: int,
+        draft_text: str = "",
+    ) -> Dict[str, Any]:
+        """Atomically move a draft into sending state before hitting WhatsApp."""
+        if not draft_id:
+            return {}
+        now = datetime.now().isoformat()
+        updates = ["status = 'sending'", "updated_at = ?"]
+        values: List[Any] = [now]
+        if draft_text.strip():
+            updates.append("draft_text = ?")
+            values.append(draft_text.strip())
+        values.append(draft_id)
+        with self._lock:
+            with closing(sqlite3.connect(str(self.db_path))) as conn:
+                cursor = conn.execute(
+                    f"""
+                    UPDATE whatsapp_proactive_drafts
+                    SET {', '.join(updates)}
+                    WHERE id = ? AND status = 'draft'
+                    """,
+                    values,
+                )
+                conn.commit()
+                if cursor.rowcount <= 0:
+                    return {}
+        return self.get_proactive_draft(draft_id)
+
+    def mark_proactive_draft(
+        self,
+        draft_id: int,
+        status: str,
+        error_text: str = "",
+        sent_message_type: str = "",
+        sent_text: str = "",
+        only_status: str = "",
+    ) -> Dict[str, Any]:
+        clean_status = self._clean_draft_status(status)
+        clean_only_status = self._clean_draft_status(only_status) if only_status else ""
+        now = datetime.now().isoformat()
+        timestamp_column = {
+            "sent": "sent_at",
+            "skipped": "skipped_at",
+            "failed": "failed_at",
+        }.get(clean_status, "")
+
+        updates = ["status = ?", "updated_at = ?", "error_text = ?", "sent_message_type = ?"]
+        values: List[Any] = [
+            clean_status,
+            now,
+            str(error_text or "")[:500],
+            str(sent_message_type or "")[:32],
+        ]
+        if sent_text:
+            updates.append("sent_text = ?")
+            values.append(sent_text.strip())
+        if timestamp_column:
+            updates.append(f"{timestamp_column} = ?")
+            values.append(now)
+        values.append(draft_id)
+        where = "WHERE id = ?"
+        if clean_only_status:
+            where += " AND status = ?"
+            values.append(clean_only_status)
+
+        with self._lock:
+            with closing(sqlite3.connect(str(self.db_path))) as conn:
+                cursor = conn.execute(
+                    f"""
+                    UPDATE whatsapp_proactive_drafts
+                    SET {', '.join(updates)}
+                    {where}
+                    """,
+                    values,
+                )
+                conn.commit()
+                if cursor.rowcount <= 0:
+                    return {}
+        return self.get_proactive_draft(draft_id)
+
     def iter_parent_profiles(self, limit: int = 200) -> List[Dict[str, Any]]:
         limit = max(1, min(int(limit or 200), 1000))
         conversations = self.list_conversations(limit=limit)
@@ -652,6 +943,37 @@ class WhatsAppMemoryStore:
             return status_text
         return "unknown"
 
+    @staticmethod
+    def _clean_draft_status(status: str) -> str:
+        status_text = str(status or "draft").strip().lower()
+        if status_text in {"draft", "sending", "sent", "skipped", "failed"}:
+            return status_text
+        return "draft"
+
+    @staticmethod
+    def _proactive_draft_fingerprint(
+        phone: str,
+        matches: List[Dict[str, Any]],
+    ) -> str:
+        course_keys = []
+        for match in matches[:5]:
+            course = match.get("course", {}) if isinstance(match, dict) else {}
+            key = (
+                course.get("id")
+                or course.get("reply_url")
+                or course.get("registration_url")
+                or course.get("detail_url")
+                or f"{course.get('name', '')}|{course.get('date', '')}"
+            )
+            if key:
+                course_keys.append(str(key))
+        payload = json.dumps(
+            {"phone": phone, "courses": course_keys},
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:32]
+
     def _upsert_conversation(self, conn: sqlite3.Connection, phone: str, now: str) -> None:
         conn.execute(
             """
@@ -679,6 +1001,23 @@ class WhatsAppMemoryStore:
     def _flag_row_to_dict(self, row: sqlite3.Row) -> Dict[str, Any]:
         result = dict(row)
         result["meta"] = self._safe_json(result.pop("meta_json", "{}"), {})
+        return result
+
+    def _draft_row_to_dict(self, row: sqlite3.Row) -> Dict[str, Any]:
+        result = dict(row)
+        result["matches"] = self._safe_json(result.pop("matches_json", "[]"), [])
+        result["profile"] = self._safe_json(result.pop("profile_json", "{}"), {})
+        result["meta"] = self._safe_json(result.pop("meta_json", "{}"), {})
+        tags_json = result.pop("tags_json", "[]",)
+        result["conversation"] = {
+            "phone": result.get("phone", ""),
+            "status": result.pop("conversation_status", "") or "ai",
+            "consent_status": result.pop("consent_status", "") or "unknown",
+            "tags": self._safe_json(tags_json, []),
+            "notes": result.pop("notes", "") or "",
+            "proactive_notes": result.pop("proactive_notes", "") or "",
+            "last_message_at": result.pop("last_message_at", "") or "",
+        }
         return result
 
     def _get_json(self, phone: str, column: str) -> Dict[str, Any]:

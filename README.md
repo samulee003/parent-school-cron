@@ -76,6 +76,11 @@ Meta 後台設定：
 | `POST` | `/api/cron?secret=...` | Cron 觸發課程抓取 |
 | `POST` | `/api/push?secret=...` | 管理員手動推送 |
 | `GET` | `/api/users?secret=...` | 管理員查看用戶 |
+| `POST` | `/api/whatsapp/proactive-drafts/generate` | 依家長記憶產生並保存主動推送草稿 |
+| `GET` | `/api/whatsapp/proactive-drafts` | 查看待發草稿與推送紀錄 |
+| `POST` | `/api/whatsapp/proactive-drafts/{draft_id}` | 修改待發草稿 |
+| `POST` | `/api/whatsapp/proactive-drafts/{draft_id}/send` | 發送已批准草稿 |
+| `POST` | `/api/whatsapp/proactive-drafts/{draft_id}/skip` | 略過草稿 |
 
 ## 目前限制
 

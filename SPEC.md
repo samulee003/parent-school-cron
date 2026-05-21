@@ -52,6 +52,11 @@
 | `POST` | `/api/cron?secret=...` | Cron 抓課程 | `CRON_SECRET` |
 | `POST` | `/api/push?secret=...` | 管理員手動推送 | `ADMIN_SECRET` 或 `CRON_SECRET` |
 | `GET` | `/api/users?secret=...` | 管理員查看用戶 | `ADMIN_SECRET` 或 `CRON_SECRET` |
+| `POST` | `/api/whatsapp/proactive-drafts/generate` | 產生並保存主動推送草稿 | 管理台登入 |
+| `GET` | `/api/whatsapp/proactive-drafts` | 草稿隊列與推送紀錄 | 管理台登入 |
+| `POST` | `/api/whatsapp/proactive-drafts/{draft_id}` | 修改待發草稿 | 管理台登入 |
+| `POST` | `/api/whatsapp/proactive-drafts/{draft_id}/send` | 發送已批准草稿 | 管理台登入 |
+| `POST` | `/api/whatsapp/proactive-drafts/{draft_id}/skip` | 略過草稿 | 管理台登入 |
 
 ## 6. WhatsApp 指令
 

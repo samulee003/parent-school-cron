@@ -193,6 +193,7 @@ Supported memory:
 - `whatsapp_conversations`: parent conversation status, latest activity, notes/tags, proactive consent status, proactive notes.
 - `whatsapp_messages`: inbound/outbound transcript for parent, AI, admin, and system messages.
 - `whatsapp_agent_flags`: placeholder table for no-match/uncertain/handoff flags.
+- `whatsapp_proactive_drafts`: persistent proactive draft queue/history; keeps AI original text, operator-edited draft, sent text, match snapshot, status, and send timestamps.
 
 ## DeepSeek Guardrail
 
@@ -230,6 +231,7 @@ Already started:
 - Notes/tags per parent.
 - AI uncertainty and no-match flags.
 - Proactive matching draft endpoint based on stored memories and course summaries.
+- Persistent proactive draft queue/history: generate drafts, edit, send, skip, and inspect past sent/skipped/failed items.
 - Parent consent status for proactive pushes: `unknown`, `allowed`, `paused`.
 - Operator-approved proactive draft sending for parents with `allowed` consent.
 - WhatsApp-side consent capture: parents can reply `同意推送` / `同意收課程提醒`
@@ -239,7 +241,7 @@ Already started:
 Next:
 
 - Stronger proactive workflow: new course -> match parent memories -> review queue -> operator approve/send.
-- Persistent proactive draft queue/history beyond transcript records.
+- Add richer proactive draft filters and retention/pruning as queue volume grows.
 - Recheck Meta WhatsApp Manager until `parent_course_reminder` is approved/active, then run one real template send test.
 
 When building this, prefer the existing FastAPI app and SQLite memory store first. Avoid adding a heavy frontend framework unless the dashboard grows beyond simple HTML/JS.

@@ -20,6 +20,7 @@ from fastapi import HTTPException
 import api_server
 from scraper import Course
 from whatsapp_handler import WhatsAppHandler, is_valid_meta_signature
+from whatsapp_memory import WhatsAppMemoryStore
 
 
 class FakeCrawler:
@@ -1277,6 +1278,219 @@ class WhatsAppHandlerTests(unittest.TestCase):
         self.assertEqual([m["phone"] for m in matches], ["85360000000"])
         self.assertIn("健康情緒與青少年同行", matches[0]["draft_text"])
         self.assertIn("https://example.test/register/health", matches[0]["draft_text"])
+
+    def test_memory_store_persists_proactive_draft_queue(self):
+        store = WhatsAppMemoryStore()
+        match_snapshot = [{
+            "score": 5,
+            "reasons": ["孩子年齡吻合", "痛點吻合"],
+            "course": {
+                "id": "c-health",
+                "name": "健康情緒與青少年同行",
+                "reply_url": "https://example.test/register/health",
+            },
+        }]
+
+        draft = store.save_proactive_draft(
+            "85360000000",
+            "AI 原始草稿",
+            matches=match_snapshot,
+            profile={"pain_points": ["情緒壓力"]},
+        )
+        duplicate = store.save_proactive_draft(
+            "85360000000",
+            "AI 原始草稿",
+            matches=match_snapshot,
+            profile={"pain_points": ["情緒壓力"]},
+        )
+        self.assertEqual(duplicate["id"], draft["id"])
+
+        edited = store.update_proactive_draft_body(draft["id"], "人工修改後草稿")
+        reopened = WhatsAppMemoryStore(str(store.db_path))
+        persisted = reopened.get_proactive_draft(edited["id"])
+
+        self.assertEqual(persisted["status"], "draft")
+        self.assertEqual(persisted["draft_text"], "人工修改後草稿")
+        self.assertEqual(persisted["original_text"], "AI 原始草稿")
+        self.assertEqual(persisted["profile"]["pain_points"], ["情緒壓力"])
+        self.assertEqual(persisted["matches"][0]["course"]["id"], "c-health")
+
+        skipped = reopened.mark_proactive_draft(persisted["id"], "skipped")
+        self.assertEqual(skipped["status"], "skipped")
+        self.assertTrue(skipped["skipped_at"])
+
+    def test_proactive_draft_claim_is_single_use(self):
+        store = WhatsAppMemoryStore()
+        draft = store.save_proactive_draft(
+            "85360000000",
+            "AI 原始草稿",
+            matches=[{"course": {"id": "c-health"}}],
+            profile={"pain_points": ["情緒壓力"]},
+        )
+
+        claimed = store.claim_proactive_draft_for_send(
+            draft["id"],
+            "第一次送出的內容",
+        )
+        second_claim = store.claim_proactive_draft_for_send(
+            draft["id"],
+            "第二次送出的內容",
+        )
+        sent = store.mark_proactive_draft(
+            draft["id"],
+            "sent",
+            sent_message_type="text",
+            sent_text="第一次送出的內容",
+            only_status="sending",
+        )
+        skipped = store.mark_proactive_draft(
+            draft["id"],
+            "skipped",
+            only_status="draft",
+        )
+
+        self.assertEqual(claimed["status"], "sending")
+        self.assertEqual(claimed["draft_text"], "第一次送出的內容")
+        self.assertEqual(second_claim, {})
+        self.assertEqual(sent["status"], "sent")
+        self.assertEqual(sent["sent_text"], "第一次送出的內容")
+        self.assertEqual(skipped, {})
+        self.assertEqual(store.get_proactive_draft(draft["id"])["status"], "sent")
+
+    def test_proactive_match_generation_persists_idempotent_drafts(self):
+        courses = [
+            Course(
+                id="c-health",
+                name="健康情緒與青少年同行",
+                date="2026/05/31 星期日 10:30-12:00",
+                date_parsed=None,
+                age_group="13-18歲",
+                age_groups=["13-18歲"],
+                topic="身心健康",
+                target="家長",
+                status="報名中",
+                detail_url="https://example.test/course/health",
+                summary="覺察青少年壓力與焦慮，學習親子衝突後真誠對話。",
+                registration_url="https://example.test/register/health",
+            )
+        ]
+        handler = WhatsAppHandler()
+        handler._get_bot = lambda: type("Bot", (), {"scraper": FakeCrawler(courses)})()
+        handler._send_text = lambda to, text: True
+        handler._handle_text_message("85360000000", "孩子13歲，最近情緒壓力大")
+
+        old_admin = os.environ.get("ADMIN_SECRET")
+        old_handler = api_server.wa_handler
+        old_memory = api_server.wa_memory
+        os.environ["ADMIN_SECRET"] = "admin-secret"
+        api_server.wa_handler = handler
+        api_server.wa_memory = handler._memory
+        try:
+            request = self.admin_request()
+            first = asyncio.run(api_server.api_whatsapp_generate_proactive_drafts(
+                api_server.ProactiveDraftGenerateRequest(),
+                request=request,
+            ))
+            second = asyncio.run(api_server.api_whatsapp_generate_proactive_drafts(
+                api_server.ProactiveDraftGenerateRequest(),
+                request=request,
+            ))
+            queue = asyncio.run(api_server.api_whatsapp_proactive_drafts(
+                request=request,
+            ))
+
+            self.assertEqual(first["total"], 1)
+            self.assertEqual(second["total"], 1)
+            self.assertEqual(first["drafts"][0]["id"], second["drafts"][0]["id"])
+            self.assertEqual(queue["total"], 1)
+            self.assertIn("健康情緒與青少年同行", queue["drafts"][0]["draft_text"])
+            self.assertEqual(queue["drafts"][0]["status"], "draft")
+        finally:
+            api_server.wa_handler = old_handler
+            api_server.wa_memory = old_memory
+            if old_admin is None:
+                os.environ.pop("ADMIN_SECRET", None)
+            else:
+                os.environ["ADMIN_SECRET"] = old_admin
+
+    def test_send_proactive_draft_requires_consent_and_records_history(self):
+        handler, sent = self.make_handler()
+        draft = handler._memory.save_proactive_draft(
+            "85360000000",
+            "AI 原始草稿",
+            matches=[{"course": {"id": "c-health", "name": "健康情緒與青少年同行"}}],
+            profile={"pain_points": ["情緒壓力"]},
+        )
+        handler._memory.record_message("85360000000", "inbound", "parent", "孩子13歲")
+
+        old_admin = os.environ.get("ADMIN_SECRET")
+        old_handler = api_server.wa_handler
+        old_memory = api_server.wa_memory
+        os.environ["ADMIN_SECRET"] = "admin-secret"
+        api_server.wa_handler = handler
+        api_server.wa_memory = handler._memory
+        try:
+            request = self.admin_request()
+            with self.assertRaises(HTTPException) as ctx:
+                asyncio.run(api_server.api_whatsapp_send_proactive_draft(
+                    draft["id"],
+                    api_server.ProactiveSendRequest(body="人工最後發送內容"),
+                    request=request,
+                ))
+            self.assertEqual(ctx.exception.status_code, 409)
+            self.assertEqual(sent, [])
+            self.assertEqual(
+                handler._memory.get_proactive_draft(draft["id"])["status"],
+                "draft",
+            )
+
+            handler._memory.update_conversation("85360000000", consent_status="allowed")
+            result = asyncio.run(api_server.api_whatsapp_send_proactive_draft(
+                draft["id"],
+                api_server.ProactiveSendRequest(body="人工最後發送內容"),
+                request=request,
+            ))
+
+            self.assertTrue(result["success"])
+            self.assertEqual(result["message_type"], "text")
+            self.assertIn("人工最後發送內容", sent[-1][1])
+            updated = handler._memory.get_proactive_draft(draft["id"])
+            self.assertEqual(updated["status"], "sent")
+            self.assertEqual(updated["original_text"], "AI 原始草稿")
+            self.assertEqual(updated["draft_text"], "人工最後發送內容")
+            self.assertEqual(updated["sent_text"], "人工最後發送內容")
+            self.assertEqual(updated["sent_message_type"], "text")
+            self.assertTrue(updated["sent_at"])
+            self.assertEqual(
+                handler._memory.get_messages("85360000000")[-1]["source"],
+                "admin",
+            )
+
+            with self.assertRaises(HTTPException) as skip_ctx:
+                asyncio.run(api_server.api_whatsapp_skip_proactive_draft(
+                    draft["id"],
+                    request=request,
+                ))
+            self.assertEqual(skip_ctx.exception.status_code, 409)
+
+            with self.assertRaises(HTTPException) as edit_ctx:
+                asyncio.run(api_server.api_whatsapp_update_proactive_draft(
+                    draft["id"],
+                    api_server.ProactiveDraftUpdateRequest(body="不應覆寫已發送紀錄"),
+                    request=request,
+                ))
+            self.assertEqual(edit_ctx.exception.status_code, 404)
+            self.assertEqual(
+                handler._memory.get_proactive_draft(draft["id"])["status"],
+                "sent",
+            )
+        finally:
+            api_server.wa_handler = old_handler
+            api_server.wa_memory = old_memory
+            if old_admin is None:
+                os.environ.pop("ADMIN_SECRET", None)
+            else:
+                os.environ["ADMIN_SECRET"] = old_admin
 
     def test_proactive_send_requires_consent_then_sends_draft(self):
         handler, sent = self.make_handler()

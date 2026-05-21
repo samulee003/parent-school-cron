@@ -206,6 +206,16 @@ class ProactiveSendRequest(BaseModel):
     template_params: list[str] = []
 
 
+class ProactiveDraftGenerateRequest(BaseModel):
+    parent_limit: int = 100
+    courses_per_parent: int = 3
+    allowed_only: bool = False
+
+
+class ProactiveDraftUpdateRequest(BaseModel):
+    body: str = ""
+
+
 # ============== FastAPI 應用 ==============
 
 app = FastAPI(
@@ -562,6 +572,8 @@ async def admin_dashboard(request: Request):
       <div class="toolbar">
         <button onclick="loadFlags()">不確定隊列</button>
         <button onclick="loadMatches()">主動匹配</button>
+        <button onclick="loadDrafts('draft')">待發草稿</button>
+        <button onclick="loadDrafts('all')">推送紀錄</button>
       </div>
       <div id="list" class="list"></div>
     </aside>
@@ -608,14 +620,18 @@ async def admin_dashboard(request: Request):
   <script>
     let conversations = [];
     let currentPhone = "";
-    let matchDrafts = {};
 
     async function api(path, options = {}) {
       const res = await fetch(path, {
         headers: {"Content-Type": "application/json"},
         ...options
       });
-      if (!res.ok) throw new Error(await res.text());
+      if (!res.ok) {
+        const text = await res.text();
+        let message = text;
+        try { message = JSON.parse(text).detail || text; } catch {}
+        throw new Error(message);
+      }
       return res.json();
     }
     function esc(text) {
@@ -705,31 +721,89 @@ async def admin_dashboard(request: Request):
       await loadFlags();
     }
     async function loadMatches() {
-      const data = await api("/api/whatsapp/proactive-matches");
-      const groups = data.matches || [];
-      matchDrafts = {};
-      document.getElementById("matches").innerHTML = groups.length ? groups.map(g => `
+      const data = await api("/api/whatsapp/proactive-drafts/generate", {
+        method: "POST",
+        body: JSON.stringify({allowed_only: true})
+      });
+      const drafts = data.drafts || [];
+      document.getElementById("matches").innerHTML = drafts.length ? drafts.map(d => `
         <div class="match">
-          <strong>${esc(g.phone)}</strong>
-          <div class="mini">${g.conversation.consent_status === "allowed" ? "已同意主動推送" : "未同意或已暫停"}</div>
-          <div class="mini">${esc((g.profile.pain_points || []).join("、"))}</div>
-          ${(g.matches || []).map(m => `<div style="margin-top:8px">
+          <strong>${esc(d.phone)}</strong>
+          <div class="mini">${d.conversation.consent_status === "allowed" ? "已同意主動推送" : "未同意或已暫停"} · 已保存到待發隊列</div>
+          <div class="mini">${esc((d.profile.pain_points || []).join("、"))}</div>
+          ${(d.matches || []).map(m => `<div style="margin-top:8px">
             <strong>${esc(m.course.name)}</strong>
             <div>${esc((m.reasons || []).join("、"))}</div>
             <div class="mini">${esc(m.course.date || "")}</div>
           </div>`).join("")}
-          <textarea id="draft-${esc(g.phone)}">${esc(g.draft_text || "")}</textarea>
-          <button onclick="sendDraft('${esc(g.phone)}')">發送草稿</button>
+          <textarea id="draft-${Number(d.id)}">${esc(d.draft_text || "")}</textarea>
+          <button onclick="saveDraft(${Number(d.id)})">儲存修改</button>
+          <button onclick="sendQueuedDraft(${Number(d.id)})">發送</button>
+          <button onclick="skipDraft(${Number(d.id)})">略過</button>
+          <button onclick="openChat('${esc(d.phone)}')">打開對話</button>
         </div>`).join("") : "目前沒有足夠記憶可主動匹配";
     }
-    async function sendDraft(phone) {
-      const body = document.getElementById("draft-" + phone).value.trim();
+    async function loadDrafts(status = "draft") {
+      const data = await api("/api/whatsapp/proactive-drafts?status=" + encodeURIComponent(status));
+      const drafts = data.drafts || [];
+      document.getElementById("matches").innerHTML = drafts.length ? drafts.map(d => `
+        <div class="match">
+          <strong>${esc(d.phone)}</strong>
+          <span class="pill">${esc(d.status)}</span>
+          <div class="mini">${d.conversation.consent_status === "allowed" ? "已同意主動推送" : "未同意或已暫停"} · ${esc(d.sent_message_type || "")}</div>
+          <div class="mini">${esc(d.updated_at || "")}</div>
+          ${d.error_text ? `<div class="mini">錯誤：${esc(d.error_text)}</div>` : ""}
+          ${d.original_text ? `<details><summary>AI 原始草稿</summary><pre>${esc(d.original_text)}</pre></details>` : ""}
+          ${d.sent_text ? `<details><summary>最後發送內容</summary><pre>${esc(d.sent_text)}</pre></details>` : ""}
+          ${(d.matches || []).length ? `<details><summary>匹配原因</summary>${(d.matches || []).map(m => `
+            <div style="margin-top:8px">
+              <strong>${esc((m.course || {}).name || "")}</strong>
+              <div>${esc((m.reasons || []).join("、"))}</div>
+            </div>`).join("")}</details>` : ""}
+          <textarea id="draft-${Number(d.id)}">${esc(d.draft_text || "")}</textarea>
+          ${d.status === "draft" ? `
+            <button onclick="saveDraft(${Number(d.id)})">儲存修改</button>
+            <button onclick="sendQueuedDraft(${Number(d.id)})">發送</button>
+            <button onclick="skipDraft(${Number(d.id)})">略過</button>
+          ` : ""}
+          <button onclick="openChat('${esc(d.phone)}')">打開對話</button>
+        </div>`).join("") : "目前沒有草稿";
+    }
+    async function saveDraft(id) {
+      const body = document.getElementById("draft-" + id).value.trim();
       if (!body) return;
-      await api("/api/whatsapp/proactive-matches/" + encodeURIComponent(phone) + "/send", {
-        method: "POST",
-        body: JSON.stringify({body})
-      });
-      await loadConversations();
+      try {
+        await api("/api/whatsapp/proactive-drafts/" + id, {
+          method: "POST",
+          body: JSON.stringify({body})
+        });
+        await loadDrafts("draft");
+      } catch (err) {
+        alert(err.message);
+      }
+    }
+    async function sendQueuedDraft(id) {
+      const body = document.getElementById("draft-" + id).value.trim();
+      if (!body) return;
+      try {
+        await api("/api/whatsapp/proactive-drafts/" + id + "/send", {
+          method: "POST",
+          body: JSON.stringify({body})
+        });
+        await loadConversations();
+        await loadDrafts("draft");
+      } catch (err) {
+        alert(err.message);
+        await loadDrafts("draft");
+      }
+    }
+    async function skipDraft(id) {
+      try {
+        await api("/api/whatsapp/proactive-drafts/" + id + "/skip", {method: "POST"});
+        await loadDrafts("draft");
+      } catch (err) {
+        alert(err.message);
+      }
     }
     loadConversations().catch(err => alert(err.message));
   </script>
@@ -830,34 +904,12 @@ async def api_whatsapp_resolve_flag(flag_id: int, request: Request):
     }
 
 
-@app.get("/api/whatsapp/proactive-matches")
-async def api_whatsapp_proactive_matches(
-    request: Request,
-    parent_limit: int = 100,
-    courses_per_parent: int = 3,
-    allowed_only: bool = False,
-):
-    """Draft proactive course matches from stored family memories."""
-    require_admin_request(request)
-    handler = get_wa_handler()
-    if not handler:
-        raise HTTPException(status_code=500, detail="WhatsApp is not configured")
-    matches = handler.get_proactive_matches(
-        parent_limit=parent_limit,
-        courses_per_parent=courses_per_parent,
-        allowed_only=allowed_only,
-    )
-    return {"total": len(matches), "matches": matches}
-
-
-@app.post("/api/whatsapp/proactive-matches/{phone}/send")
-async def api_whatsapp_send_proactive_match(
+def _send_operator_proactive_message(
     phone: str,
+    message: str,
     payload: ProactiveSendRequest,
-    request: Request,
-):
-    """Send an operator-approved proactive draft to a consented parent."""
-    require_admin_request(request)
+) -> str:
+    """Send a proactive operator-approved message and return the message type."""
     store = get_wa_memory_store()
     conversation = store.get_conversation(phone)
     if conversation.get("consent_status") != "allowed":
@@ -868,9 +920,9 @@ async def api_whatsapp_send_proactive_match(
     handler = get_wa_handler()
     if not handler:
         raise HTTPException(status_code=500, detail="WhatsApp is not configured")
-    message = payload.body.strip()
     if not message:
         raise HTTPException(status_code=400, detail="Message body is required")
+
     needs_template = (
         payload.use_template
         or not handler.is_within_customer_service_window(phone)
@@ -899,11 +951,175 @@ async def api_whatsapp_send_proactive_match(
             transcript_body=message,
         ):
             raise HTTPException(status_code=502, detail="WhatsApp template message failed")
-        return {"success": True, "message_type": "template"}
+        return "template"
 
     if not handler.send_admin_message(phone, message):
         raise HTTPException(status_code=502, detail="WhatsApp message failed")
-    return {"success": True, "message_type": "text"}
+    return "text"
+
+
+@app.get("/api/whatsapp/proactive-matches")
+async def api_whatsapp_proactive_matches(
+    request: Request,
+    parent_limit: int = 100,
+    courses_per_parent: int = 3,
+    allowed_only: bool = False,
+):
+    """Draft proactive course matches from stored family memories."""
+    require_admin_request(request)
+    handler = get_wa_handler()
+    if not handler:
+        raise HTTPException(status_code=500, detail="WhatsApp is not configured")
+    matches = handler.get_proactive_matches(
+        parent_limit=parent_limit,
+        courses_per_parent=courses_per_parent,
+        allowed_only=allowed_only,
+    )
+    return {"total": len(matches), "matches": matches}
+
+
+@app.post("/api/whatsapp/proactive-drafts/generate")
+async def api_whatsapp_generate_proactive_drafts(
+    payload: ProactiveDraftGenerateRequest,
+    request: Request,
+):
+    """Persist proactive match drafts into the operator review queue."""
+    require_admin_request(request)
+    handler = get_wa_handler()
+    if not handler:
+        raise HTTPException(status_code=500, detail="WhatsApp is not configured")
+    matches = handler.get_proactive_matches(
+        parent_limit=payload.parent_limit,
+        courses_per_parent=payload.courses_per_parent,
+        allowed_only=payload.allowed_only,
+    )
+    store = get_wa_memory_store()
+    drafts = [
+        store.save_proactive_draft(
+            phone=match["phone"],
+            draft_text=match.get("draft_text", ""),
+            matches=match.get("matches", []),
+            profile=match.get("profile", {}),
+            meta={"source": "proactive_match"},
+        )
+        for match in matches
+        if match.get("draft_text")
+    ]
+    drafts = [draft for draft in drafts if draft]
+    return {"total": len(drafts), "drafts": drafts}
+
+
+@app.get("/api/whatsapp/proactive-drafts")
+async def api_whatsapp_proactive_drafts(
+    request: Request,
+    status: str = "draft",
+    phone: str = "",
+    limit: int = 100,
+):
+    """List persisted proactive drafts and send history."""
+    require_admin_request(request)
+    drafts = get_wa_memory_store().list_proactive_drafts(
+        status=status,
+        phone=phone,
+        limit=limit,
+    )
+    return {"total": len(drafts), "drafts": drafts}
+
+
+@app.post("/api/whatsapp/proactive-drafts/{draft_id}")
+async def api_whatsapp_update_proactive_draft(
+    draft_id: int,
+    payload: ProactiveDraftUpdateRequest,
+    request: Request,
+):
+    """Update an operator-edited proactive draft before sending."""
+    require_admin_request(request)
+    draft = get_wa_memory_store().update_proactive_draft_body(
+        draft_id,
+        payload.body,
+    )
+    if not draft:
+        raise HTTPException(status_code=404, detail="Draft not found or not editable")
+    return {"success": True, "draft": draft}
+
+
+@app.post("/api/whatsapp/proactive-drafts/{draft_id}/skip")
+async def api_whatsapp_skip_proactive_draft(draft_id: int, request: Request):
+    """Mark a proactive draft as intentionally skipped."""
+    require_admin_request(request)
+    draft = get_wa_memory_store().mark_proactive_draft(
+        draft_id,
+        "skipped",
+        only_status="draft",
+    )
+    if not draft:
+        raise HTTPException(status_code=409, detail="Draft is not pending")
+    return {"success": True, "draft": draft}
+
+
+@app.post("/api/whatsapp/proactive-drafts/{draft_id}/send")
+async def api_whatsapp_send_proactive_draft(
+    draft_id: int,
+    payload: ProactiveSendRequest,
+    request: Request,
+):
+    """Send a persisted proactive draft and record the final status."""
+    require_admin_request(request)
+    store = get_wa_memory_store()
+    draft = store.get_proactive_draft(draft_id)
+    if not draft:
+        raise HTTPException(status_code=404, detail="Draft not found")
+    if draft.get("status") != "draft":
+        raise HTTPException(status_code=409, detail="Draft is not pending")
+    message = payload.body.strip() or str(draft.get("draft_text", "")).strip()
+    draft = store.claim_proactive_draft_for_send(draft_id, message)
+    if not draft:
+        raise HTTPException(status_code=409, detail="Draft is already being processed")
+    try:
+        message_type = _send_operator_proactive_message(
+            draft["phone"],
+            message,
+            payload,
+        )
+    except HTTPException as exc:
+        if exc.status_code >= 500:
+            store.mark_proactive_draft(
+                draft_id,
+                "failed",
+                error_text=str(exc.detail),
+                only_status="sending",
+            )
+        else:
+            store.mark_proactive_draft(
+                draft_id,
+                "draft",
+                error_text=str(exc.detail),
+                only_status="sending",
+            )
+        raise
+    updated = store.mark_proactive_draft(
+        draft_id,
+        "sent",
+        sent_message_type=message_type,
+        sent_text=message,
+        only_status="sending",
+    )
+    if not updated:
+        raise HTTPException(status_code=409, detail="Draft status changed during send")
+    return {"success": True, "message_type": message_type, "draft": updated}
+
+
+@app.post("/api/whatsapp/proactive-matches/{phone}/send")
+async def api_whatsapp_send_proactive_match(
+    phone: str,
+    payload: ProactiveSendRequest,
+    request: Request,
+):
+    """Send an operator-approved proactive draft to a consented parent."""
+    require_admin_request(request)
+    message = payload.body.strip()
+    message_type = _send_operator_proactive_message(phone, message, payload)
+    return {"success": True, "message_type": message_type}
 
 
 # ============== 企業微信客服回調 ==============

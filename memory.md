@@ -26,6 +26,7 @@
 - `/admin` 已有家長標籤、備註、不確定/無匹配隊列、主動匹配草稿。
 - `/admin` 已有主動推送同意狀態：`unknown` / `allowed` / `paused`。
 - 已有 operator approval loop：主動匹配產生草稿，只有 `allowed` 家長可以由管理台批准發送。
+- 已有 persistent proactive draft queue/history：主動匹配可保存為待發草稿，管理台可編輯、發送、略過，並保留 AI 原始草稿、人工最後發送內容、課程匹配快照和狀態時間。
 - WhatsApp 端已能直接更新主動推送同意：家長回覆 `同意推送` / `同意收課程提醒` 會變 `allowed`，回覆 `暫停推送` 會變 `paused`。
 - 已有 WhatsApp template 發送通道：主動草稿若超出 24 小時 customer service window，會自動改用 `WHATSAPP_PROACTIVE_TEMPLATE_NAME`；未配置模板時會阻止發送。
 - WhatsApp webhook 預設 fail-closed：缺 `WHATSAPP_APP_SECRET` 時拒絕處理 POST webhook；若線上仍未取得 Meta App Secret，可暫時明確設 `WHATSAPP_ALLOW_UNSIGNED_WEBHOOK=true` 維持舊行為，補上 App Secret 後要關掉。
@@ -137,6 +138,7 @@ git diff --check
 - Course detail summaries and real registration links.
 - Proactive consent status and notes.
 - Operator-approved proactive draft send endpoint.
+- Persistent proactive draft queue/history.
 - WhatsApp-side consent capture commands.
 - WhatsApp template payload sending for proactive messages outside the 24-hour window.
 - WhatsApp webhook fail-closed signature enforcement with an explicit temporary unsigned compatibility flag.
@@ -147,7 +149,7 @@ git diff --check
 ### Does not exist yet
 
 - Production Meta template approval is still pending in Meta review.
-- Persistent proactive draft queue/history beyond transcript records.
+- Richer proactive draft filters/history search beyond basic status listing.
 
 ## Recommended Next Build
 
