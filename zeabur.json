@@ -25,6 +25,16 @@
       "required": true
     },
     {
+      "key": "WHATSAPP_PROACTIVE_TEMPLATE_NAME",
+      "description": "Approved WhatsApp template name for proactive messages outside the 24-hour window",
+      "required": false
+    },
+    {
+      "key": "WHATSAPP_PROACTIVE_TEMPLATE_LANGUAGE",
+      "description": "WhatsApp proactive template language code, for example zh_HK",
+      "required": false
+    },
+    {
       "key": "CRON_SECRET",
       "description": "Cron endpoint secret",
       "required": true

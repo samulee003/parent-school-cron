@@ -55,4 +55,6 @@ Meta webhook 驗證通過後，用允許的測試手機號向 WhatsApp 測試號
 
 - 測試號碼只能給白名單用戶；公開前要換正式號碼。
 - Temporary token 會過期；公開前要換 Permanent token。
-- 主動每週推送需要 message template；第一版先用家長主動查詢。
+- 主動每週推送需要已核准 WhatsApp message template。Meta 審批通過後，在
+  Zeabur 設定 `WHATSAPP_PROACTIVE_TEMPLATE_NAME`，語言可用
+  `WHATSAPP_PROACTIVE_TEMPLATE_LANGUAGE=zh_HK`。

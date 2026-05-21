@@ -29,6 +29,8 @@ WhatsApp 家長訊息
 | `WHATSAPP_ACCESS_TOKEN` | Permanent Access Token |
 | `WHATSAPP_VERIFY_TOKEN` | Meta Webhook Verify Token |
 | `WHATSAPP_APP_SECRET` | Meta App Secret，驗證 webhook 簽名 |
+| `WHATSAPP_PROACTIVE_TEMPLATE_NAME` | 可選，窗口外主動推送使用的已核准 WhatsApp template 名稱 |
+| `WHATSAPP_PROACTIVE_TEMPLATE_LANGUAGE` | 可選，template 語言，預設 `zh_HK` |
 | `CRON_SECRET` | Cron endpoint secret |
 | `ADMIN_SECRET` | Admin endpoint secret |
 | `WXAGENT_DATA_DIR` | 建議 `/app/data` |
@@ -80,4 +82,5 @@ curl -X POST "https://你的域名/api/cron?secret=你的CRON_SECRET"
 
 - 測試號碼不能公開給所有家長。
 - Temporary token 會過期。
-- 超出 24 小時對話窗口的主動推送，需要 WhatsApp message template。
+- 超出 24 小時對話窗口的主動推送，需要已核准 WhatsApp message template。
+  設定 `WHATSAPP_PROACTIVE_TEMPLATE_NAME` 後，主動草稿才會走 template 發送。

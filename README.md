@@ -56,6 +56,8 @@ Meta 後台設定：
 | `WHATSAPP_ACCESS_TOKEN` | Permanent token |
 | `WHATSAPP_VERIFY_TOKEN` | Meta webhook 驗證 token |
 | `WHATSAPP_APP_SECRET` | 推薦，用於驗證 Meta 簽名 |
+| `WHATSAPP_PROACTIVE_TEMPLATE_NAME` | 可選，窗口外主動推送使用的已核准 WhatsApp template 名稱 |
+| `WHATSAPP_PROACTIVE_TEMPLATE_LANGUAGE` | 可選，template 語言，預設 `zh_HK` |
 | `CRON_SECRET` | 保護 `/api/cron` |
 | `ADMIN_SECRET` | 保護 `/api/push` 與 `/api/users` |
 
@@ -75,7 +77,8 @@ Meta 後台設定：
 
 - WhatsApp 測試號碼只能給 Meta 白名單測試用戶互動。
 - 正式公開使用需要正式 WhatsApp 號碼、Permanent token、Meta webhook 設定完成。
-- 每週主動推送若超出 24 小時對話窗口，需要 WhatsApp message template；第一版先做「家長主動查詢」。
+- 每週主動推送若超出 24 小時對話窗口，需要 WhatsApp message template；未設定
+  `WHATSAPP_PROACTIVE_TEMPLATE_NAME` 時，系統會阻止窗口外主動發送。
 
 ## 驗證
 
