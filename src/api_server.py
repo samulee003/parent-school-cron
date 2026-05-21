@@ -5,6 +5,7 @@
 
 import logging
 import os
+import re
 import sys
 import json
 import hashlib
@@ -229,8 +230,97 @@ class PrivacyPruneRequest(BaseModel):
     dry_run: bool = True
 
 
+class QaFeedbackRequest(BaseModel):
+    message_id: int = 0
+    rating: str = "bad"
+    issue_type: str = "other"
+    summary: str = ""
+    expected_behavior: str = ""
+
+
+class QaFeedbackStatusRequest(BaseModel):
+    status: str = "closed"
+
+
 def _profile_options() -> Dict[str, list[str]]:
     return WhatsAppHandler.admin_profile_options()
+
+
+def _scrub_private_text(text: str) -> str:
+    scrubbed = str(text or "")
+    scrubbed = re.sub(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+", "[email]", scrubbed)
+    scrubbed = re.sub(r"\+?\d[\d\s().-]{5,}\d", "[phone]", scrubbed)
+    return scrubbed[:1200]
+
+
+def _build_qa_learning_sample(
+    store: WhatsAppMemoryStore,
+    phone: str,
+    message_id: int,
+    rating: str,
+    issue_type: str,
+    summary: str,
+    expected_behavior: str,
+) -> Dict:
+    messages = store.get_messages(phone, limit=80)
+    selected_index = -1
+    for index, message in enumerate(messages):
+        if int(message.get("id", 0) or 0) == int(message_id or 0):
+            selected_index = index
+            break
+    if selected_index < 0:
+        for index in range(len(messages) - 1, -1, -1):
+            message = messages[index]
+            if message.get("direction") == "outbound" and message.get("source") == "ai":
+                selected_index = index
+                break
+    if selected_index < 0 and messages:
+        selected_index = len(messages) - 1
+
+    selected = messages[selected_index] if selected_index >= 0 else {}
+    parent_message = ""
+    ai_response = ""
+    if selected.get("source") == "parent":
+        parent_message = str(selected.get("body", ""))
+    elif selected.get("source") == "ai":
+        ai_response = str(selected.get("body", ""))
+
+    for index in range(selected_index - 1, -1, -1):
+        message = messages[index]
+        if not parent_message and message.get("source") == "parent":
+            parent_message = str(message.get("body", ""))
+        if not ai_response and message.get("source") == "ai":
+            ai_response = str(message.get("body", ""))
+        if parent_message and ai_response:
+            break
+    for index in range(selected_index + 1, len(messages)):
+        message = messages[index]
+        if not ai_response and message.get("source") == "ai":
+            ai_response = str(message.get("body", ""))
+        if not parent_message and message.get("source") == "parent":
+            parent_message = str(message.get("body", ""))
+        if parent_message and ai_response:
+            break
+
+    profile = store.get_profile(phone)
+    return {
+        "source": "admin_qa_feedback",
+        "message_id": int(selected.get("id", 0) or 0),
+        "rating": str(rating or "bad"),
+        "issue_type": str(issue_type or "other"),
+        "parent_message": _scrub_private_text(parent_message),
+        "ai_response": _scrub_private_text(ai_response),
+        "operator_summary": _scrub_private_text(summary),
+        "expected_behavior": _scrub_private_text(expected_behavior),
+        "profile": {
+            "age_groups": profile.get("age_groups", []),
+            "pain_points": profile.get("pain_points", []),
+            "target": profile.get("target", ""),
+            "topic": profile.get("topic", ""),
+            "pain_summary": _scrub_private_text(profile.get("pain_summary", "")),
+        },
+        "privacy": "phone/email-like strings scrubbed; original transcript stays admin-only",
+    }
 
 
 def _build_agent_state(
@@ -253,9 +343,12 @@ def _build_agent_state(
 
     open_flags_count = store.count_agent_flags(phone=phone, unresolved_only=True)
     draft_count = store.count_proactive_drafts(phone=phone, status="draft")
+    qa_feedback_count = store.count_qa_feedback(status="open", phone=phone)
     consent_status = (conversation or store.get_conversation(phone)).get("consent_status", "unknown")
 
-    if open_flags_count:
+    if qa_feedback_count:
+        recommended_action = "檢視 QA 回饋"
+    elif open_flags_count:
         recommended_action = "需要人工判斷"
     elif "age_group" in missing_fields:
         recommended_action = "追問年齡"
@@ -272,6 +365,7 @@ def _build_agent_state(
         "recommended_action": recommended_action,
         "open_flags_count": open_flags_count,
         "draft_count": draft_count,
+        "qa_feedback_count": qa_feedback_count,
     }
 
 
@@ -285,6 +379,7 @@ def _enrich_conversation_for_inbox(
     agent_state = _build_agent_state(store, phone, profile, conversation)
     enriched["open_flags_count"] = agent_state["open_flags_count"]
     enriched["draft_count"] = agent_state["draft_count"]
+    enriched["qa_feedback_count"] = agent_state["qa_feedback_count"]
     enriched["profile_ready"] = agent_state["profile_ready"]
     enriched["recommended_action"] = agent_state["recommended_action"]
     return enriched
@@ -375,9 +470,22 @@ def _build_agent_tasks_for_conversation(
     tasks: list[Dict] = []
     open_flags = int(state.get("open_flags_count", 0) or 0)
     draft_count = int(state.get("draft_count", 0) or 0)
+    qa_feedback_count = int(state.get("qa_feedback_count", 0) or 0)
     consent_status = str(conversation.get("consent_status", "unknown") or "unknown")
     missing_fields = set(state.get("missing_fields", []))
 
+    if qa_feedback_count:
+        tasks.append(_agent_task(
+            "review_qa_feedback",
+            phone,
+            105,
+            "檢視朋友測試回饋",
+            f"這位家長有 {qa_feedback_count} 個開放 QA 標記，可整理成 prompt rule 或回歸測試。",
+            "打開對話，查看 QA 學習樣本",
+            conversation,
+            state,
+            profile,
+        ))
     if open_flags:
         tasks.append(_agent_task(
             "review_flag",
@@ -1039,6 +1147,7 @@ async def admin_dashboard(request: Request):
       <div class="toolbar tools">
         <button onclick="loadFlags()">不確定隊列</button>
         <button onclick="loadAgentTasks()">Agent 任務</button>
+        <button onclick="loadQaFeedback()">QA 回饋</button>
         <button onclick="loadMatches()">主動匹配</button>
         <button onclick="loadDrafts('draft')">待發草稿</button>
         <button onclick="loadDrafts('all')">推送紀錄</button>
@@ -1135,6 +1244,24 @@ async def admin_dashboard(request: Request):
         </div>
         <div class="kv"><details><summary class="label">原始 Profile JSON</summary><pre id="profile">{}</pre></details></div>
         <div class="kv"><div class="label">上次查詢</div><pre id="lastQuery">{}</pre></div>
+        <div class="kv stack">
+          <div class="label">朋友測試 QA</div>
+          <select id="qaIssueType">
+            <option value="classification_error">分類錯</option>
+            <option value="missed_course">漏課程</option>
+            <option value="off_topic_should_block">不應回答</option>
+            <option value="unclear_reply">回覆不清楚</option>
+            <option value="onboarding_gap">訪談沒問好</option>
+            <option value="link_error">連結錯</option>
+            <option value="handoff_needed">應人工接手</option>
+            <option value="good_reply">回答好</option>
+            <option value="other">其他</option>
+          </select>
+          <textarea id="qaSummary" placeholder="發生什麼問題，例如：朋友問青少年情緒，AI 回了親子活動"></textarea>
+          <textarea id="qaExpected" placeholder="正確應該怎樣回，例如：保留 13-18歲 + 家長課 + 情緒壓力"></textarea>
+          <button onclick="submitQaFeedback()">記錄 QA 標記</button>
+          <div id="qaFeedback" class="mini">尚未載入</div>
+        </div>
         <div class="kv"><div class="label">Agent 任務隊列</div><div id="agentTasks" class="mini">尚未載入</div></div>
         <div class="kv"><div class="label">不確定隊列</div><div id="flags" class="mini">尚未載入</div></div>
         <div class="kv"><div class="label">主動匹配草稿</div><div id="matches" class="mini">尚未產生</div></div>
@@ -1211,7 +1338,7 @@ async def admin_dashboard(request: Request):
     }
     function updateQueueStats() {
       const total = conversations.length;
-      const flagged = conversations.reduce((sum, c) => sum + (Number(c.open_flags_count || 0) > 0 ? 1 : 0), 0);
+      const flagged = conversations.reduce((sum, c) => sum + (Number(c.open_flags_count || 0) > 0 || Number(c.qa_feedback_count || 0) > 0 ? 1 : 0), 0);
       const human = conversations.filter(c => c.status === "human").length;
       const pushable = conversations.filter(c => c.consent_status === "allowed").length;
       document.getElementById("conversationCount").textContent = `${total} 對話`;
@@ -1261,6 +1388,7 @@ async def admin_dashboard(request: Request):
                 <span class="pill ${consentClass}">${esc(consentText)}</span>
                 ${c.profile_ready ? `<span class="pill info">Profile OK</span>` : ""}
                 ${Number(c.open_flags_count || 0) ? `<span class="pill alert">待處理 ${Number(c.open_flags_count || 0)}</span>` : ""}
+                ${Number(c.qa_feedback_count || 0) ? `<span class="pill alert">QA ${Number(c.qa_feedback_count || 0)}</span>` : ""}
                 ${Number(c.draft_count || 0) ? `<span class="pill">草稿 ${Number(c.draft_count || 0)}</span>` : ""}
               </div>
             </div>
@@ -1274,7 +1402,7 @@ async def admin_dashboard(request: Request):
         <div>狀態：<span class="${readyClass}">${state.profile_ready ? "資料足夠" : "需要補資料"}</span></div>
         <div>下一步：${esc(state.recommended_action || "-")}</div>
         <div>缺少：${esc((state.missing_fields || []).join(", ") || "無")}</div>
-        <div>待處理：${Number(state.open_flags_count || 0)} · 草稿：${Number(state.draft_count || 0)}</div>
+        <div>待處理：${Number(state.open_flags_count || 0)} · QA：${Number(state.qa_feedback_count || 0)} · 草稿：${Number(state.draft_count || 0)}</div>
       `;
     }
     function renderCheckboxGroup(containerId, name, options, selected) {
@@ -1331,6 +1459,7 @@ async def admin_dashboard(request: Request):
           <div>${esc(f.summary)}</div>
           <button onclick="resolveFlag(${Number(f.id)})">標記已處理</button>
         </div>`).join("") : "目前沒有待處理項目";
+      renderQaFeedback(data.qa_feedback || []);
       document.getElementById("matches").innerHTML = (data.drafts || []).length ? (data.drafts || []).map(d => `
         <div class="match">
           <strong>草稿 #${Number(d.id)}</strong>
@@ -1343,6 +1472,12 @@ async def admin_dashboard(request: Request):
       document.getElementById("messages").innerHTML = (data.messages || []).length ? (data.messages || []).map(m => `
         <div class="bubble ${m.direction}">
           <div class="meta">${esc(m.source)} · ${esc(m.created_at)}</div>${esc(m.body)}
+          ${m.source === "ai" ? `<div style="margin-top:8px; display:flex; gap:6px; flex-wrap:wrap">
+            <button class="compact" onclick="submitQaQuick(${Number(m.id)}, 'good', 'good_reply')">回答好</button>
+            <button class="compact" onclick="submitQaQuick(${Number(m.id)}, 'bad', 'unclear_reply')">回答差</button>
+            <button class="compact" onclick="submitQaQuick(${Number(m.id)}, 'bad', 'missed_course')">漏課</button>
+            <button class="compact" onclick="submitQaQuick(${Number(m.id)}, 'bad', 'off_topic_should_block')">不應答</button>
+          </div>` : ""}
         </div>`).join("") : `<div class="empty"><div><strong>還沒有訊息</strong><span>可以先人工傳一則開場訊息。</span></div></div>`;
       renderList();
     }
@@ -1408,6 +1543,7 @@ async def admin_dashboard(request: Request):
     }
     function taskTypeLabel(type) {
       const labels = {
+        review_qa_feedback: "QA 回饋",
         review_flag: "待人工判斷",
         human_takeover: "人工接手",
         ask_age: "追問年齡",
@@ -1417,6 +1553,76 @@ async def admin_dashboard(request: Request):
         generate_draft: "可產生草稿"
       };
       return labels[type] || type;
+    }
+    function issueTypeLabel(type) {
+      const labels = {
+        good_reply: "回答好",
+        classification_error: "分類錯",
+        missed_course: "漏課程",
+        off_topic_should_block: "不應回答",
+        unclear_reply: "回覆不清楚",
+        handoff_needed: "應人工接手",
+        link_error: "連結錯",
+        onboarding_gap: "訪談沒問好",
+        other: "其他"
+      };
+      return labels[type] || type;
+    }
+    function renderQaFeedback(items) {
+      document.getElementById("qaFeedback").innerHTML = items.length ? items.map(item => `
+        <div class="flag">
+          <strong>${esc(issueTypeLabel(item.issue_type))} · ${esc(item.rating)}</strong>
+          <div>${esc(item.summary || "沒有補充摘要")}</div>
+          ${item.expected_behavior ? `<div class="mini">期望：${esc(item.expected_behavior)}</div>` : ""}
+          <details><summary>匿名樣本</summary><pre>${esc(JSON.stringify(item.anonymized_sample || {}, null, 2))}</pre></details>
+          <button onclick="markQaFeedback(${Number(item.id)}, 'converted')">已轉測試/規則</button>
+          <button onclick="markQaFeedback(${Number(item.id)}, 'closed')">關閉</button>
+        </div>
+      `).join("") : "目前沒有開放 QA 標記";
+    }
+    async function submitQaQuick(messageId, rating, issueType) {
+      if (!currentPhone) return;
+      await api("/api/whatsapp/conversations/" + encodeURIComponent(currentPhone) + "/qa-feedback", {
+        method: "POST",
+        body: JSON.stringify({
+          message_id: messageId,
+          rating,
+          issue_type: issueType,
+          summary: issueType === "good_reply" ? "朋友測試標記：回答好" : "朋友測試標記：" + issueTypeLabel(issueType),
+          expected_behavior: ""
+        })
+      });
+      await loadConversations();
+      await openChat(currentPhone);
+    }
+    async function submitQaFeedback() {
+      if (!currentPhone) return;
+      await api("/api/whatsapp/conversations/" + encodeURIComponent(currentPhone) + "/qa-feedback", {
+        method: "POST",
+        body: JSON.stringify({
+          rating: document.getElementById("qaIssueType").value === "good_reply" ? "good" : "bad",
+          issue_type: document.getElementById("qaIssueType").value,
+          summary: document.getElementById("qaSummary").value,
+          expected_behavior: document.getElementById("qaExpected").value
+        })
+      });
+      document.getElementById("qaSummary").value = "";
+      document.getElementById("qaExpected").value = "";
+      await loadConversations();
+      await openChat(currentPhone);
+    }
+    async function loadQaFeedback(status = "open") {
+      const data = await api("/api/whatsapp/qa-feedback?status=" + encodeURIComponent(status));
+      renderQaFeedback(data.feedback || []);
+    }
+    async function markQaFeedback(id, status) {
+      await api("/api/whatsapp/qa-feedback/" + id + "/status", {
+        method: "POST",
+        body: JSON.stringify({status})
+      });
+      if (currentPhone) await openChat(currentPhone);
+      else await loadQaFeedback();
+      await loadAgentTasks().catch(() => {});
     }
     async function loadAgentTasks() {
       const q = document.getElementById("search").value.trim();
@@ -1513,7 +1719,7 @@ async def admin_dashboard(request: Request):
       const counts = data.counts || {};
       document.getElementById("privacyResult").textContent =
         (dryRun ? "預覽：" : "已清理：") +
-        `訊息 ${counts.messages || 0}、LLM cache ${counts.llm_cache || 0}、去重紀錄 ${counts.processed_message_ids || 0}、已解決 flags ${counts.resolved_flags || 0}、舊推送紀錄 ${counts.closed_proactive_drafts || 0}`;
+        `訊息 ${counts.messages || 0}、LLM cache ${counts.llm_cache || 0}、去重紀錄 ${counts.processed_message_ids || 0}、已解決 flags ${counts.resolved_flags || 0}、舊推送紀錄 ${counts.closed_proactive_drafts || 0}、已關閉 QA ${counts.closed_qa_feedback || 0}`;
     }
     async function saveDraft(id) {
       const body = document.getElementById("draft-" + id).value.trim();
@@ -1594,6 +1800,7 @@ async def api_whatsapp_conversation(phone: str, request: Request, limit: int = 1
         "messages": store.get_messages(phone, limit=limit),
         "flags": store.list_agent_flags(unresolved_only=True, phone=phone, limit=50),
         "drafts": store.list_proactive_drafts(status="draft", phone=phone, limit=20),
+        "qa_feedback": store.list_qa_feedback(status="open", phone=phone, limit=20),
         "agent_state": _build_agent_state(store, phone, profile, conversation),
         "profile_options": _profile_options(),
     }
@@ -1702,6 +1909,77 @@ async def api_whatsapp_agent_tasks(
         limit=limit,
         search=search,
     )
+
+
+@app.get("/api/whatsapp/qa-feedback")
+async def api_whatsapp_qa_feedback(
+    request: Request,
+    status: str = "open",
+    phone: str = "",
+    issue_type: str = "",
+    limit: int = 100,
+):
+    """List operator QA marks and anonymized learning samples."""
+    require_admin_request(request)
+    feedback = get_wa_memory_store().list_qa_feedback(
+        status=status,
+        phone=phone,
+        issue_type=issue_type,
+        limit=limit,
+    )
+    return {"total": len(feedback), "feedback": feedback}
+
+
+@app.post("/api/whatsapp/conversations/{phone}/qa-feedback")
+async def api_whatsapp_add_qa_feedback(
+    phone: str,
+    payload: QaFeedbackRequest,
+    request: Request,
+):
+    """Save an admin QA mark without sending raw private data to any LLM."""
+    require_admin_request(request)
+    store = get_wa_memory_store()
+    sample = _build_qa_learning_sample(
+        store=store,
+        phone=phone,
+        message_id=payload.message_id,
+        rating=payload.rating,
+        issue_type=payload.issue_type,
+        summary=payload.summary,
+        expected_behavior=payload.expected_behavior,
+    )
+    feedback = store.add_qa_feedback(
+        phone=phone,
+        message_id=payload.message_id,
+        rating=payload.rating,
+        issue_type=payload.issue_type,
+        summary=payload.summary,
+        expected_behavior=payload.expected_behavior,
+        anonymized_sample=sample,
+    )
+    conversation = store.get_conversation(phone)
+    return {
+        "success": True,
+        "feedback": feedback,
+        "agent_state": _build_agent_state(store, phone, store.get_profile(phone), conversation),
+    }
+
+
+@app.post("/api/whatsapp/qa-feedback/{feedback_id}/status")
+async def api_whatsapp_update_qa_feedback_status(
+    feedback_id: int,
+    payload: QaFeedbackStatusRequest,
+    request: Request,
+):
+    """Close or mark a QA sample as converted into a test/prompt rule."""
+    require_admin_request(request)
+    feedback = get_wa_memory_store().mark_qa_feedback(
+        feedback_id,
+        status=payload.status,
+    )
+    if not feedback:
+        raise HTTPException(status_code=404, detail="QA feedback not found")
+    return {"success": True, "feedback": feedback}
 
 
 @app.post("/api/whatsapp/flags/{flag_id}/resolve")

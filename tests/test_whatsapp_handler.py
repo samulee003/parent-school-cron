@@ -1580,6 +1580,80 @@ class WhatsAppHandlerTests(unittest.TestCase):
             else:
                 os.environ["ADMIN_SECRET"] = old_admin
 
+    def test_admin_qa_feedback_creates_anonymized_learning_sample_and_task(self):
+        handler, sent = self.make_handler()
+        handler._handle_text_message("85360000000", "我的電話是 +853 6123 4567，搜尋活動")
+        ai_message = handler._memory.get_messages("85360000000")[-1]
+
+        old_admin = os.environ.get("ADMIN_SECRET")
+        old_handler = api_server.wa_handler
+        old_memory = api_server.wa_memory
+        os.environ["ADMIN_SECRET"] = "admin-secret"
+        api_server.wa_handler = handler
+        api_server.wa_memory = handler._memory
+        try:
+            request = self.admin_request()
+            with self.assertRaises(HTTPException) as auth_ctx:
+                asyncio.run(api_server.api_whatsapp_add_qa_feedback(
+                    "85360000000",
+                    api_server.QaFeedbackRequest(
+                        message_id=ai_message["id"],
+                        rating="bad",
+                        issue_type="missed_course",
+                        summary="朋友說想搜尋活動，但 AI 沒有給可用的課程方向",
+                        expected_behavior="應先訪談年齡和痛點，再推薦課程",
+                    ),
+                    request=self.admin_request(secret="", cookie="wrong-cookie"),
+                ))
+            self.assertEqual(auth_ctx.exception.status_code, 401)
+
+            created = asyncio.run(api_server.api_whatsapp_add_qa_feedback(
+                "85360000000",
+                api_server.QaFeedbackRequest(
+                    message_id=ai_message["id"],
+                    rating="bad",
+                    issue_type="missed_course",
+                    summary="朋友說想搜尋活動，但 AI 沒有給可用的課程方向",
+                    expected_behavior="應先訪談年齡和痛點，再推薦課程",
+                ),
+                request=request,
+            ))
+
+            self.assertTrue(created["success"])
+            feedback = created["feedback"]
+            self.assertEqual(feedback["issue_type"], "missed_course")
+            self.assertEqual(feedback["rating"], "bad")
+            sample = feedback["anonymized_sample"]
+            self.assertEqual(sample["source"], "admin_qa_feedback")
+            self.assertIn("搜尋活動", sample["parent_message"])
+            self.assertNotIn("6123", json.dumps(sample, ensure_ascii=False))
+            self.assertIn("[phone]", sample["parent_message"])
+
+            detail = asyncio.run(api_server.api_whatsapp_conversation(
+                "85360000000",
+                request=request,
+            ))
+            self.assertEqual(detail["agent_state"]["qa_feedback_count"], 1)
+            self.assertEqual(detail["qa_feedback"][0]["issue_type"], "missed_course")
+
+            tasks = asyncio.run(api_server.api_whatsapp_agent_tasks(request=request))
+            task_types = [task["type"] for task in tasks["tasks"]]
+            self.assertEqual(task_types[0], "review_qa_feedback")
+
+            closed = asyncio.run(api_server.api_whatsapp_update_qa_feedback_status(
+                feedback["id"],
+                api_server.QaFeedbackStatusRequest(status="converted"),
+                request=request,
+            ))
+            self.assertEqual(closed["feedback"]["status"], "converted")
+        finally:
+            api_server.wa_handler = old_handler
+            api_server.wa_memory = old_memory
+            if old_admin is None:
+                os.environ.pop("ADMIN_SECRET", None)
+            else:
+                os.environ["ADMIN_SECRET"] = old_admin
+
     def test_whatsapp_admin_dashboard_contains_agent_inbox_controls(self):
         old_admin = os.environ.get("ADMIN_SECRET")
         os.environ["ADMIN_SECRET"] = "admin-secret"
@@ -1605,6 +1679,9 @@ class WhatsAppHandlerTests(unittest.TestCase):
             self.assertIn("profileSummary", html)
             self.assertIn("loadAgentTasks", html)
             self.assertIn("agentTasks", html)
+            self.assertIn("朋友測試 QA", html)
+            self.assertIn("submitQaFeedback", html)
+            self.assertIn("loadQaFeedback", html)
             self.assertIn("人工接手", html)
             self.assertIn("不確定隊列", html)
             self.assertIn("主動匹配草稿", html)

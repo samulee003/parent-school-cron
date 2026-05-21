@@ -155,6 +155,35 @@ class WhatsAppMemoryStore:
                     ON whatsapp_proactive_drafts (phone, status)
                     """
                 )
+                conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS whatsapp_qa_feedback (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        phone TEXT NOT NULL,
+                        message_id INTEGER NOT NULL DEFAULT 0,
+                        rating TEXT NOT NULL DEFAULT 'bad',
+                        issue_type TEXT NOT NULL DEFAULT 'other',
+                        summary TEXT NOT NULL DEFAULT '',
+                        expected_behavior TEXT NOT NULL DEFAULT '',
+                        anonymized_json TEXT NOT NULL DEFAULT '{}',
+                        status TEXT NOT NULL DEFAULT 'open',
+                        created_at TEXT NOT NULL,
+                        updated_at TEXT NOT NULL
+                    )
+                    """
+                )
+                conn.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS idx_whatsapp_qa_feedback_status_updated
+                    ON whatsapp_qa_feedback (status, updated_at)
+                    """
+                )
+                conn.execute(
+                    """
+                    CREATE INDEX IF NOT EXISTS idx_whatsapp_qa_feedback_phone_created
+                    ON whatsapp_qa_feedback (phone, created_at)
+                    """
+                )
                 self._ensure_column(
                     conn,
                     "whatsapp_agent_flags",
@@ -184,6 +213,12 @@ class WhatsAppMemoryStore:
                     "whatsapp_proactive_drafts",
                     "sent_text",
                     "TEXT NOT NULL DEFAULT ''",
+                )
+                self._ensure_column(
+                    conn,
+                    "whatsapp_qa_feedback",
+                    "anonymized_json",
+                    "TEXT NOT NULL DEFAULT '{}'",
                 )
                 conn.commit()
 
@@ -569,6 +604,148 @@ class WhatsAppMemoryStore:
                 conn.commit()
                 return cursor.rowcount > 0
 
+    def add_qa_feedback(
+        self,
+        phone: str,
+        message_id: int = 0,
+        rating: str = "bad",
+        issue_type: str = "other",
+        summary: str = "",
+        expected_behavior: str = "",
+        anonymized_sample: Dict[str, Any] | None = None,
+    ) -> Dict[str, Any]:
+        """Persist an operator QA mark plus a privacy-scrubbed learning sample."""
+        if not phone:
+            return {}
+
+        now = datetime.now().isoformat()
+        clean_rating = self._clean_qa_rating(rating)
+        clean_issue_type = self._clean_qa_issue_type(issue_type)
+        sample_json = json.dumps(anonymized_sample or {}, ensure_ascii=False)
+        with self._lock:
+            with closing(sqlite3.connect(str(self.db_path))) as conn:
+                self._upsert_conversation(conn, phone, now)
+                cursor = conn.execute(
+                    """
+                    INSERT INTO whatsapp_qa_feedback (
+                        phone, message_id, rating, issue_type, summary,
+                        expected_behavior, anonymized_json, status, created_at, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, 'open', ?, ?)
+                    """,
+                    (
+                        phone,
+                        max(0, int(message_id or 0)),
+                        clean_rating,
+                        clean_issue_type,
+                        str(summary or "").strip()[:500],
+                        str(expected_behavior or "").strip()[:800],
+                        sample_json,
+                        now,
+                        now,
+                    ),
+                )
+                conn.commit()
+                feedback_id = int(cursor.lastrowid or 0)
+        return self.get_qa_feedback(feedback_id)
+
+    def get_qa_feedback(self, feedback_id: int) -> Dict[str, Any]:
+        if not feedback_id:
+            return {}
+        with self._lock:
+            with closing(sqlite3.connect(str(self.db_path))) as conn:
+                conn.row_factory = sqlite3.Row
+                row = conn.execute(
+                    """
+                    SELECT *
+                    FROM whatsapp_qa_feedback
+                    WHERE id = ?
+                    """,
+                    (feedback_id,),
+                ).fetchone()
+        return self._qa_feedback_row_to_dict(row) if row else {}
+
+    def list_qa_feedback(
+        self,
+        status: str = "open",
+        phone: str = "",
+        issue_type: str = "",
+        limit: int = 100,
+    ) -> List[Dict[str, Any]]:
+        limit = max(1, min(int(limit or 100), 300))
+        clauses: List[str] = []
+        values: List[Any] = []
+        clean_status = self._clean_qa_status(status) if status else ""
+        if clean_status and clean_status != "all":
+            clauses.append("status = ?")
+            values.append(clean_status)
+        if phone:
+            clauses.append("phone = ?")
+            values.append(phone)
+        clean_issue = self._clean_qa_issue_type(issue_type) if issue_type else ""
+        if clean_issue:
+            clauses.append("issue_type = ?")
+            values.append(clean_issue)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        values.append(limit)
+        with self._lock:
+            with closing(sqlite3.connect(str(self.db_path))) as conn:
+                conn.row_factory = sqlite3.Row
+                rows = conn.execute(
+                    f"""
+                    SELECT *
+                    FROM whatsapp_qa_feedback
+                    {where}
+                    ORDER BY updated_at DESC, id DESC
+                    LIMIT ?
+                    """,
+                    values,
+                ).fetchall()
+        return [self._qa_feedback_row_to_dict(row) for row in rows]
+
+    def mark_qa_feedback(self, feedback_id: int, status: str = "closed") -> Dict[str, Any]:
+        clean_status = self._clean_qa_status(status)
+        if not feedback_id:
+            return {}
+        now = datetime.now().isoformat()
+        with self._lock:
+            with closing(sqlite3.connect(str(self.db_path))) as conn:
+                cursor = conn.execute(
+                    """
+                    UPDATE whatsapp_qa_feedback
+                    SET status = ?, updated_at = ?
+                    WHERE id = ?
+                    """,
+                    (clean_status, now, feedback_id),
+                )
+                conn.commit()
+                if cursor.rowcount <= 0:
+                    return {}
+        return self.get_qa_feedback(feedback_id)
+
+    def count_qa_feedback(self, status: str = "open", phone: str = "") -> int:
+        clauses: List[str] = []
+        values: List[Any] = []
+        clean_status = self._clean_qa_status(status) if status else ""
+        if clean_status and clean_status != "all":
+            clauses.append("status = ?")
+            values.append(clean_status)
+        if phone:
+            clauses.append("phone = ?")
+            values.append(phone)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        with self._lock:
+            with closing(sqlite3.connect(str(self.db_path))) as conn:
+                row = conn.execute(
+                    f"""
+                    SELECT COUNT(*)
+                    FROM whatsapp_qa_feedback
+                    {where}
+                    """,
+                    values,
+                ).fetchone()
+        return int(row[0]) if row else 0
+
     def save_proactive_draft(
         self,
         phone: str,
@@ -736,6 +913,11 @@ class WhatsAppMemoryStore:
             "closed_proactive_drafts": (
                 "whatsapp_proactive_drafts",
                 "status IN ('sent', 'skipped', 'failed') AND updated_at < ?",
+                [cutoff],
+            ),
+            "closed_qa_feedback": (
+                "whatsapp_qa_feedback",
+                "status IN ('closed', 'converted') AND updated_at < ?",
                 [cutoff],
             ),
         }
@@ -1081,6 +1263,36 @@ class WhatsAppMemoryStore:
         return "draft"
 
     @staticmethod
+    def _clean_qa_rating(rating: str) -> str:
+        rating_text = str(rating or "bad").strip().lower()
+        if rating_text in {"good", "bad", "neutral"}:
+            return rating_text
+        return "bad"
+
+    @staticmethod
+    def _clean_qa_issue_type(issue_type: str) -> str:
+        issue_text = str(issue_type or "other").strip().lower()
+        allowed = {
+            "good_reply",
+            "classification_error",
+            "missed_course",
+            "off_topic_should_block",
+            "unclear_reply",
+            "handoff_needed",
+            "link_error",
+            "onboarding_gap",
+            "other",
+        }
+        return issue_text if issue_text in allowed else "other"
+
+    @staticmethod
+    def _clean_qa_status(status: str) -> str:
+        status_text = str(status or "open").strip().lower()
+        if status_text in {"open", "closed", "converted", "all"}:
+            return status_text
+        return "open"
+
+    @staticmethod
     def _proactive_draft_fingerprint(
         phone: str,
         matches: List[Dict[str, Any]],
@@ -1148,6 +1360,14 @@ class WhatsAppMemoryStore:
             "proactive_notes": result.pop("proactive_notes", "") or "",
             "last_message_at": result.pop("last_message_at", "") or "",
         }
+        return result
+
+    def _qa_feedback_row_to_dict(self, row: sqlite3.Row) -> Dict[str, Any]:
+        result = dict(row)
+        result["anonymized_sample"] = self._safe_json(
+            result.pop("anonymized_json", "{}"),
+            {},
+        )
         return result
 
     def _get_json(self, phone: str, column: str) -> Dict[str, Any]:
