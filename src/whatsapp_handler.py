@@ -67,6 +67,11 @@ COURSE_DOMAIN_KEYWORDS = (
     "家長", "家长", "小朋友", "孩子", "子女", "嬰幼", "婴幼",
     "幼兒", "幼儿", "小學", "小学", "青少年", "中學", "中学",
 )
+COURSE_INTENT_KEYWORDS = (
+    "課程", "课程", "course", "最新", "推薦", "推荐", "推介",
+    "幫我揀", "帮我揀", "幫我選", "帮我选", "報名", "报名",
+    "搵", "找", "搜尋", "搜索", "查詢", "查询", "查找", "search",
+)
 PARENT_CONTEXT_KEYWORDS = (
     "小朋友", "孩子", "子女", "仔女", "兒子", "儿子", "女兒", "女儿",
     "我個仔", "我个仔", "我個女", "我个女", "家長", "家长", "父母",
@@ -636,10 +641,7 @@ class WhatsAppHandler:
 
         text_lower = text.strip().lower()
         has_domain = any(k in text_lower for k in COURSE_DOMAIN_KEYWORDS)
-        has_intent = any(
-            k in text_lower
-            for k in ["課程", "course", "最新", "推薦", "推介", "幫我揀", "幫我選", "報名", "搵", "找"]
-        )
+        has_intent = any(k in text_lower for k in COURSE_INTENT_KEYWORDS)
         return has_domain and has_intent
 
     @staticmethod

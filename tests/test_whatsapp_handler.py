@@ -145,6 +145,16 @@ class WhatsAppHandlerTests(unittest.TestCase):
         self.assertIn("升學壓力", sent[0][1])
         self.assertNotIn("嬰幼繪本氹氹轉", sent[0][1])
 
+    def test_search_activity_without_profile_asks_parent_interview_question(self):
+        handler, sent = self.make_handler()
+
+        handler._handle_text_message("85360000000", "搜尋活動")
+
+        self.assertIn("小朋友幾多歲", sent[0][1])
+        self.assertIn("情緒", sent[0][1])
+        self.assertNotIn("未能轉成課程條件", sent[0][1])
+        self.assertEqual(handler._memory.list_agent_flags(), [])
+
     def test_complete_onboarding_answer_stores_memory_and_adds_soft_consent_prompt(self):
         courses = [
             Course(
