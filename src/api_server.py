@@ -612,20 +612,26 @@ def _admin_login_html() -> str:
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>WhatsApp 家長學堂接手台登入</title>
   <style>
-    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #f6f7f4; color: #1f2933; }
+    :root { --bg: #f5f6f2; --panel: #ffffff; --line: #d8ddd2; --ink: #17212b; --muted: #66737d; --brand: #0d7a56; --brand-dark: #075f43; --danger: #9b2c2c; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: var(--bg); color: var(--ink); letter-spacing: 0; }
     main { min-height: 100vh; display: grid; place-items: center; padding: 24px; }
-    form { width: min(360px, 100%); background: #fff; border: 1px solid #d9ded7; border-radius: 8px; padding: 22px; display: grid; gap: 12px; }
-    h1 { font-size: 18px; margin: 0 0 6px; }
-    input, button { font: inherit; border-radius: 6px; padding: 10px 12px; }
-    input { border: 1px solid #d9ded7; }
-    button { border: 1px solid #0f8f5f; background: #0f8f5f; color: #fff; cursor: pointer; }
-    .msg { min-height: 20px; color: #9b2c2c; font-size: 13px; }
+    form { width: min(380px, 100%); background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 28px; display: grid; gap: 14px; box-shadow: 0 18px 48px rgba(23, 33, 43, .08); }
+    h1 { font-size: 20px; margin: 0; line-height: 1.25; }
+    .hint { margin: -2px 0 6px; color: var(--muted); font-size: 13px; line-height: 1.5; }
+    input, button { font: inherit; border-radius: 6px; padding: 11px 12px; }
+    input { border: 1px solid var(--line); background: #fbfcfa; color: var(--ink); outline: none; }
+    input:focus { border-color: var(--brand); box-shadow: 0 0 0 3px rgba(13, 122, 86, .12); background: #fff; }
+    button { border: 1px solid var(--brand); background: var(--brand); color: #fff; cursor: pointer; font-weight: 700; }
+    button:hover { background: var(--brand-dark); }
+    .msg { min-height: 20px; color: var(--danger); font-size: 13px; }
   </style>
 </head>
 <body>
   <main>
     <form id="login">
       <h1>WhatsApp 家長學堂接手台</h1>
+      <p class="hint">輸入管理密鑰後進入家長 inbox。</p>
       <input id="secret" type="password" autocomplete="current-password" placeholder="管理密鑰" autofocus>
       <button type="submit">登入</button>
       <div id="msg" class="msg"></div>
@@ -701,57 +707,111 @@ async def admin_dashboard(request: Request):
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>WhatsApp 家長學堂接手台</title>
   <style>
-    :root { color-scheme: light; --line: #d9ded7; --ink: #1f2933; --muted: #5f6f79; --brand: #0f8f5f; --bg: #f6f7f4; }
+    :root {
+      color-scheme: light;
+      --bg: #f4f6f2;
+      --panel: #ffffff;
+      --panel-soft: #f9faf7;
+      --line: #d9ded2;
+      --line-soft: #e9ece4;
+      --ink: #17212b;
+      --muted: #66737d;
+      --faint: #8b969f;
+      --brand: #0d7a56;
+      --brand-dark: #075f43;
+      --brand-soft: #e7f4ed;
+      --warn: #95621b;
+      --warn-bg: #fff7e8;
+      --danger: #a13b3b;
+      --shadow: 0 10px 30px rgba(23, 33, 43, .06);
+    }
     * { box-sizing: border-box; }
-    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: var(--ink); background: var(--bg); }
-    header { height: 52px; display: flex; align-items: center; justify-content: space-between; padding: 0 18px; border-bottom: 1px solid var(--line); background: #fff; }
-    h1 { font-size: 18px; margin: 0; font-weight: 700; }
-    main { display: grid; grid-template-columns: 300px minmax(360px, 1fr) 340px; min-height: calc(100vh - 52px); }
-    aside, section { border-right: 1px solid var(--line); background: #fff; min-width: 0; }
-    aside:last-child { border-right: 0; }
-    .toolbar { padding: 12px; border-bottom: 1px solid var(--line); display: flex; gap: 8px; align-items: center; }
+    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: var(--ink); background: var(--bg); letter-spacing: 0; }
+    header { height: 60px; display: flex; align-items: center; justify-content: space-between; padding: 0 18px 0 22px; border-bottom: 1px solid var(--line); background: rgba(255,255,255,.92); backdrop-filter: blur(10px); position: sticky; top: 0; z-index: 2; }
+    h1 { font-size: 18px; margin: 0; font-weight: 750; line-height: 1.2; }
+    .subtle { color: var(--muted); font-size: 12px; margin-top: 2px; }
+    main { display: grid; grid-template-columns: 320px minmax(420px, 1fr) 380px; height: calc(100vh - 60px); min-height: 560px; }
+    aside, section { background: var(--panel); min-width: 0; }
+    aside:first-child { border-right: 1px solid var(--line); }
+    aside:last-child { border-left: 1px solid var(--line); }
+    section { background: linear-gradient(180deg, #fbfcfa 0%, #f4f6f2 100%); }
+    .toolbar { padding: 12px; border-bottom: 1px solid var(--line-soft); display: flex; gap: 8px; align-items: center; }
+    .toolbar.stack { display: grid; grid-template-columns: 1fr; gap: 8px; }
+    .tools { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+    .panel-title { display: flex; justify-content: space-between; align-items: center; gap: 10px; min-height: 44px; }
+    .chat-title { display: grid; gap: 2px; }
     input, textarea, button, select { font: inherit; }
-    input, textarea, select { width: 100%; border: 1px solid var(--line); border-radius: 6px; padding: 9px 10px; background: #fff; }
-    textarea { min-height: 88px; resize: vertical; }
-    button { border: 1px solid var(--line); background: #fff; border-radius: 6px; padding: 8px 10px; cursor: pointer; white-space: nowrap; }
+    input, textarea, select { width: 100%; border: 1px solid var(--line); border-radius: 6px; padding: 9px 10px; background: #fff; color: var(--ink); outline: none; }
+    input:focus, textarea:focus, select:focus { border-color: var(--brand); box-shadow: 0 0 0 3px rgba(13, 122, 86, .11); }
+    textarea { min-height: 88px; resize: vertical; line-height: 1.45; }
+    button { border: 1px solid var(--line); background: #fff; color: var(--ink); border-radius: 6px; padding: 8px 10px; cursor: pointer; white-space: nowrap; font-weight: 650; }
+    button:hover { border-color: #b8c1b4; background: #fbfcfa; }
     button.primary { background: var(--brand); color: #fff; border-color: var(--brand); }
-    button.warn { border-color: #b7791f; color: #8a5200; }
-    .list { overflow: auto; max-height: calc(100vh - 105px); }
-    .row { padding: 12px; border-bottom: 1px solid var(--line); cursor: pointer; }
-    .row:hover, .row.active { background: #eef7f1; }
-    .phone { font-weight: 700; font-size: 14px; }
-    .latest { color: var(--muted); font-size: 13px; margin-top: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .pill { display: inline-block; font-size: 12px; border: 1px solid var(--line); border-radius: 999px; padding: 2px 8px; color: var(--muted); margin-top: 6px; }
-    .pill.human { color: #8a5200; border-color: #d69e2e; background: #fffaf0; }
-    .messages { padding: 16px; overflow: auto; height: calc(100vh - 210px); display: flex; flex-direction: column; gap: 10px; }
-    .bubble { max-width: 78%; padding: 10px 12px; border-radius: 8px; line-height: 1.45; white-space: pre-wrap; word-break: break-word; border: 1px solid var(--line); }
+    button.primary:hover { background: var(--brand-dark); border-color: var(--brand-dark); }
+    button.warn { border-color: #d8a948; color: var(--warn); background: var(--warn-bg); }
+    button.ghost { color: var(--muted); background: transparent; }
+    .list { overflow: auto; height: calc(100vh - 234px); }
+    .row { padding: 13px 14px; border-bottom: 1px solid var(--line-soft); cursor: pointer; transition: background .12s ease, border-color .12s ease; }
+    .row:hover { background: #f7faf5; }
+    .row.active { background: var(--brand-soft); box-shadow: inset 3px 0 0 var(--brand); }
+    .phone { font-weight: 750; font-size: 14px; }
+    .latest { color: var(--muted); font-size: 13px; margin-top: 5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .row-meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+    .pill { display: inline-flex; align-items: center; min-height: 22px; font-size: 12px; border: 1px solid var(--line); border-radius: 999px; padding: 2px 8px; color: var(--muted); background: #fff; }
+    .pill.human { color: var(--warn); border-color: #e0be75; background: var(--warn-bg); }
+    .pill.ok { color: var(--brand); border-color: #a7d6bd; background: #eff9f3; }
+    .pill.alert { color: var(--danger); border-color: #e3b7b7; background: #fff4f4; }
+    .messages { padding: 18px 18px 20px; overflow: auto; height: calc(100vh - 220px); display: flex; flex-direction: column; gap: 12px; }
+    .bubble { max-width: min(78%, 720px); padding: 11px 13px; border-radius: 8px; line-height: 1.48; white-space: pre-wrap; word-break: break-word; border: 1px solid var(--line); box-shadow: 0 2px 8px rgba(23, 33, 43, .03); }
     .inbound { align-self: flex-start; background: #fff; }
-    .outbound { align-self: flex-end; background: #e8f7ee; border-color: #bddfc8; }
-    .meta { color: var(--muted); font-size: 12px; margin-bottom: 4px; }
-    .composer { padding: 12px; border-top: 1px solid var(--line); background: #fff; display: grid; grid-template-columns: 1fr auto; gap: 8px; }
-    .sidebody { padding: 14px; display: grid; gap: 12px; }
-    .kv { border-bottom: 1px solid var(--line); padding-bottom: 10px; }
-    .label { color: var(--muted); font-size: 12px; margin-bottom: 4px; }
-    .mini { color: var(--muted); font-size: 12px; line-height: 1.4; }
-    .flag, .match { border: 1px solid var(--line); border-radius: 6px; padding: 8px; margin-top: 8px; background: #fff; }
-    .match strong { display: block; margin-bottom: 4px; }
-    .match textarea { min-height: 120px; margin-top: 8px; }
+    .outbound { align-self: flex-end; background: #e6f4ec; border-color: #b8dbc5; }
+    .meta { color: var(--faint); font-size: 12px; margin-bottom: 5px; }
+    .composer { padding: 12px; border-top: 1px solid var(--line); background: rgba(255,255,255,.95); display: grid; grid-template-columns: 1fr auto; gap: 8px; }
+    .composer textarea { min-height: 74px; }
+    .sidebody { height: calc(100vh - 60px); overflow: auto; padding: 14px; display: grid; gap: 12px; align-content: start; }
+    .kv { border: 1px solid var(--line-soft); border-radius: 8px; padding: 11px; background: #fff; }
+    .kv.flat { border: 0; border-radius: 0; border-bottom: 1px solid var(--line-soft); padding: 0 0 10px; }
+    .label { color: var(--muted); font-size: 12px; margin-bottom: 6px; font-weight: 700; }
+    .mini { color: var(--muted); font-size: 12px; line-height: 1.45; }
+    .flag, .match { border: 1px solid var(--line-soft); border-radius: 8px; padding: 10px; margin-top: 8px; background: #fff; }
+    .match strong, .flag strong { display: block; margin-bottom: 5px; }
+    .match textarea { min-height: 118px; margin-top: 8px; }
     .stack { display: grid; gap: 8px; }
     .chips { display: flex; gap: 6px; flex-wrap: wrap; }
-    .chip { display: inline-flex; gap: 4px; align-items: center; border: 1px solid var(--line); border-radius: 999px; padding: 5px 8px; font-size: 12px; background: #fff; }
-    .state { display: grid; gap: 4px; font-size: 13px; background: #f4f5f2; border-radius: 6px; padding: 10px; }
-    pre { margin: 0; white-space: pre-wrap; word-break: break-word; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; background: #f4f5f2; padding: 10px; border-radius: 6px; }
-    @media (max-width: 900px) { main { grid-template-columns: 1fr; } aside, section { min-height: 260px; border-right: 0; border-bottom: 1px solid var(--line); } .messages { height: 360px; } }
+    .chip { display: inline-flex; gap: 5px; align-items: center; border: 1px solid var(--line); border-radius: 999px; padding: 5px 9px; font-size: 12px; background: #fff; color: var(--ink); }
+    .chip input { width: auto; margin: 0; accent-color: var(--brand); }
+    .state { display: grid; gap: 5px; font-size: 13px; background: var(--panel-soft); border: 1px solid var(--line-soft); border-radius: 8px; padding: 10px; }
+    .state .ready { color: var(--brand); font-weight: 750; }
+    .state .missing { color: var(--warn); font-weight: 750; }
+    details summary { cursor: pointer; }
+    pre { margin: 0; white-space: pre-wrap; word-break: break-word; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; background: #f4f5f2; padding: 10px; border-radius: 6px; border: 1px solid var(--line-soft); }
+    @media (max-width: 1080px) {
+      main { grid-template-columns: 300px minmax(360px, 1fr); }
+      aside:last-child { grid-column: 1 / -1; border-left: 0; border-top: 1px solid var(--line); }
+      .sidebody { height: auto; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+    @media (max-width: 760px) {
+      header { height: auto; min-height: 58px; align-items: flex-start; padding: 12px; gap: 10px; }
+      main { grid-template-columns: 1fr; height: auto; }
+      aside:first-child, aside:last-child { border: 0; border-bottom: 1px solid var(--line); }
+      .list { height: 320px; }
+      .messages { height: 420px; }
+      .sidebody { grid-template-columns: 1fr; height: auto; }
+      .composer { grid-template-columns: 1fr; }
+    }
   </style>
 </head>
 <body>
   <header>
-    <h1>WhatsApp 家長學堂接手台</h1>
-    <button onclick="loadConversations()">刷新</button>
+    <div>
+      <h1>家長學堂 Agent Inbox</h1>
+      <div class="subtle">WhatsApp 對話、家長記憶、主動推送草稿</div>
+    </div>
+    <button class="ghost" onclick="loadConversations()">刷新</button>
   </header>
   <main>
     <aside>
-      <div class="toolbar" style="display:grid; grid-template-columns: 1fr; gap:8px">
+      <div class="toolbar stack">
         <input id="search" placeholder="搜尋電話、訊息、Profile" oninput="loadConversations()">
         <select id="filterStatus" onchange="loadConversations()">
           <option value="">全部對話</option>
@@ -762,13 +822,13 @@ async def admin_dashboard(request: Request):
           <option value="draft">有草稿</option>
         </select>
       </div>
-      <div class="toolbar">
+      <div class="toolbar tools">
         <button onclick="loadFlags()">不確定隊列</button>
         <button onclick="loadMatches()">主動匹配</button>
         <button onclick="loadDrafts('draft')">待發草稿</button>
         <button onclick="loadDrafts('all')">推送紀錄</button>
       </div>
-      <div class="toolbar" style="display:grid; grid-template-columns: 1fr 1fr; gap:8px">
+      <div class="toolbar tools">
         <select id="draftStatus">
           <option value="draft">待發</option>
           <option value="sent">已發送</option>
@@ -788,7 +848,12 @@ async def admin_dashboard(request: Request):
       <div id="list" class="list"></div>
     </aside>
     <section>
-      <div class="toolbar"><strong id="chatTitle">未選擇對話</strong></div>
+      <div class="toolbar panel-title">
+        <div class="chat-title">
+          <strong id="chatTitle">未選擇對話</strong>
+          <span class="subtle">選擇左側家長後可查看完整上下文</span>
+        </div>
+      </div>
       <div id="messages" class="messages"></div>
       <div class="composer">
         <textarea id="reply" placeholder="人工回覆"></textarea>
@@ -797,7 +862,7 @@ async def admin_dashboard(request: Request):
     </section>
     <aside>
       <div class="sidebody">
-        <div class="kv"><div class="label">狀態</div><div id="status">-</div></div>
+        <div class="kv flat"><div class="label">狀態</div><div id="status">-</div></div>
         <div class="kv"><div class="label">Agent State</div><div id="agentState" class="state">未選擇</div></div>
         <div style="display:flex; gap:8px; flex-wrap:wrap">
           <button class="warn" onclick="takeover()">人工接手</button>
@@ -894,15 +959,18 @@ async def admin_dashboard(request: Request):
         .map(c => `<div class="row ${c.phone === currentPhone ? "active" : ""}" onclick="openChat('${esc(c.phone)}')">
           <div class="phone">${esc(c.phone)}</div>
           <div class="latest">${esc(c.latest_message || "")}</div>
-          <span class="pill ${c.status === "human" ? "human" : ""}">${c.status === "human" ? "人工接手" : "AI 自動"}</span>
-          <span class="pill">${c.consent_status === "allowed" ? "可推送" : c.consent_status === "paused" ? "暫停推送" : "未同意"}</span>
-          ${Number(c.open_flags_count || 0) ? `<span class="pill">待處理 ${Number(c.open_flags_count || 0)}</span>` : ""}
-          ${Number(c.draft_count || 0) ? `<span class="pill">草稿 ${Number(c.draft_count || 0)}</span>` : ""}
+          <div class="row-meta">
+            <span class="pill ${c.status === "human" ? "human" : "ok"}">${c.status === "human" ? "人工接手" : "AI 自動"}</span>
+            <span class="pill ${c.consent_status === "allowed" ? "ok" : c.consent_status === "paused" ? "human" : ""}">${c.consent_status === "allowed" ? "可推送" : c.consent_status === "paused" ? "暫停推送" : "未同意"}</span>
+            ${Number(c.open_flags_count || 0) ? `<span class="pill alert">待處理 ${Number(c.open_flags_count || 0)}</span>` : ""}
+            ${Number(c.draft_count || 0) ? `<span class="pill">草稿 ${Number(c.draft_count || 0)}</span>` : ""}
+          </div>
         </div>`).join("");
     }
     function renderAgentState(state) {
+      const readyClass = state.profile_ready ? "ready" : "missing";
       document.getElementById("agentState").innerHTML = `
-        <div>狀態：${state.profile_ready ? "資料足夠" : "需要補資料"}</div>
+        <div>狀態：<span class="${readyClass}">${state.profile_ready ? "資料足夠" : "需要補資料"}</span></div>
         <div>下一步：${esc(state.recommended_action || "-")}</div>
         <div>缺少：${esc((state.missing_fields || []).join(", ") || "無")}</div>
         <div>待處理：${Number(state.open_flags_count || 0)} · 草稿：${Number(state.draft_count || 0)}</div>
@@ -936,7 +1004,9 @@ async def admin_dashboard(request: Request):
       currentPhone = phone;
       const data = await api("/api/whatsapp/conversations/" + encodeURIComponent(phone));
       document.getElementById("chatTitle").textContent = phone;
-      document.getElementById("status").textContent = data.conversation.status === "human" ? "人工接手中" : "AI 自動回覆";
+      document.getElementById("status").innerHTML = data.conversation.status === "human"
+        ? `<span class="pill human">人工接手中</span>`
+        : `<span class="pill ok">AI 自動回覆</span>`;
       document.getElementById("tags").value = (data.conversation.tags || []).join(", ");
       document.getElementById("notes").value = data.conversation.notes || "";
       document.getElementById("consentStatus").value = data.conversation.consent_status || "unknown";
