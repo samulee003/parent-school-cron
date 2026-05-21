@@ -16,6 +16,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # 複製源碼
 COPY src/ ./src/
+COPY whatsapp_parent_school_qr*.png ./
 COPY zeabur.yaml .
 
 # 創建數據目錄

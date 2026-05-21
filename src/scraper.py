@@ -6,7 +6,7 @@ import logging
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import List, Dict, Optional
-from urllib.parse import urljoin
+from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
 import requests
 from bs4 import BeautifulSoup
@@ -29,6 +29,43 @@ TOPICS = [
 
 # 對象列表
 TARGETS = ["家長", "親子"]
+
+
+def normalize_course_detail_url(url: str) -> str:
+    """Return a WhatsApp-safe DSEDJ course URL.
+
+    DSEDJ detail links contain a query parameter named ``regstatus``. In some
+    renderers and LLM replies, ``&regstatus`` is treated like the HTML entity
+    ``&reg`` and becomes ``®status``. Put ``regstatus`` first and URL-encode
+    the Chinese value so the link stays clickable in WhatsApp.
+    """
+    if not url:
+        return ""
+
+    cleaned = str(url).strip().replace("&amp;", "&")
+    cleaned = re.sub(
+        r"(?:\u00ae\ufe0f?|%C2%AE(?:%EF%B8%8F)?)status",
+        "&regstatus",
+        cleaned,
+        flags=re.IGNORECASE,
+    )
+
+    try:
+        parts = urlsplit(cleaned)
+    except ValueError:
+        return cleaned
+
+    if not parts.query:
+        return cleaned
+
+    params = parse_qsl(parts.query, keep_blank_values=True)
+    if not params:
+        return cleaned
+
+    priority = {"regstatus": 0, "msg_id": 1, "langsel": 2}
+    params.sort(key=lambda item: (priority.get(item[0], 99), item[0]))
+    query = urlencode(params, doseq=True)
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, query, parts.fragment))
 
 
 @dataclass
@@ -209,7 +246,9 @@ class CourseScraper:
             if name_link and name_link.get("onclick"):
                 match = re.search(r"changeIframeURL\('([^']+)'", name_link["onclick"])
                 if match:
-                    detail_url = urljoin(self.base_url, match.group(1))
+                    detail_url = normalize_course_detail_url(
+                        urljoin(self.base_url, match.group(1))
+                    )
 
             # 日期（桌面版列）
             date_str = ""

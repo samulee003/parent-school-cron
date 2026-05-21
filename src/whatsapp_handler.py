@@ -14,7 +14,7 @@ from typing import Optional, List, Dict, Any
 import requests
 
 from bot_webhook import ZeaburBot
-from scraper import AGE_GROUP_LABELS, TOPICS, TARGETS
+from scraper import AGE_GROUP_LABELS, TOPICS, TARGETS, normalize_course_detail_url
 from whatsapp_memory import WhatsAppMemoryStore
 
 logger = logging.getLogger("whatsapp_handler")
@@ -336,6 +336,24 @@ class WhatsAppHandler:
         )
 
     @staticmethod
+    def _repair_reply_links(text: str) -> str:
+        """Repair DSEDJ links that an LLM or renderer may have entity-decoded."""
+        if not text:
+            return ""
+
+        trailing_punctuation = "。．，、；;：:！!？?）)]"
+
+        def repair(match: re.Match) -> str:
+            raw_url = match.group(0)
+            suffix = ""
+            while raw_url and raw_url[-1] in trailing_punctuation:
+                suffix = raw_url[-1] + suffix
+                raw_url = raw_url[:-1]
+            return normalize_course_detail_url(raw_url) + suffix
+
+        return re.sub(r"https://portal\.dsedj\.gov\.mo[^\s<>]*", repair, text)
+
+    @staticmethod
     def _is_all_courses_request(text: str) -> bool:
         normalized = text.strip().lower().replace(" ", "")
         return normalized in ALL_COURSE_KEYWORDS
@@ -595,7 +613,7 @@ class WhatsAppHandler:
                 course_topic = self._course_value(c, "topic")
                 course_target = self._course_value(c, "target")
                 status = self._course_value(c, "status")
-                link = self._course_value(c, "detail_url")
+                link = normalize_course_detail_url(self._course_value(c, "detail_url"))
                 lines.append(f"\n*{i}. {title}*")
                 if date_str:
                     lines.append(f"📅 {date_str}")
@@ -645,7 +663,7 @@ class WhatsAppHandler:
             "topic": self._course_value(course, "topic"),
             "target": self._course_value(course, "target"),
             "status": self._course_value(course, "status"),
-            "detail_url": self._course_value(course, "detail_url"),
+            "detail_url": normalize_course_detail_url(self._course_value(course, "detail_url")),
         }
 
     def _llm_cache_key(
@@ -794,7 +812,10 @@ class WhatsAppHandler:
             cached_reply = self._memory.get_llm_cached_response(cache_key)
             if cached_reply:
                 logger.info("DeepSeek 快取命中 from=%s", from_number)
-                return cached_reply
+                repaired_reply = self._repair_reply_links(cached_reply)
+                if repaired_reply != cached_reply:
+                    self._memory.save_llm_cached_response(cache_key, repaired_reply)
+                return repaired_reply
 
             daily_limit = get_deepseek_daily_limit_per_user()
             global_limit = get_deepseek_daily_limit_global()
@@ -845,6 +866,7 @@ class WhatsAppHandler:
             ]
             reply = self._call_deepseek(messages)
             if reply:
+                reply = self._repair_reply_links(reply)
                 self._memory.save_llm_cached_response(cache_key, reply)
             return reply
         except Exception as e:
@@ -887,7 +909,7 @@ class WhatsAppHandler:
         topic = self._course_value(c, "topic")
         target = self._course_value(c, "target")
         status = self._course_value(c, "status")
-        link = self._course_value(c, "detail_url")
+        link = normalize_course_detail_url(self._course_value(c, "detail_url"))
         lines = [f"🔎 *{title}*"]
         if date_str:
             lines.append(f"📅 {date_str}")

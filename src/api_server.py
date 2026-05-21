@@ -17,7 +17,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 logger = logging.getLogger("api_server")
 
 from fastapi import FastAPI, Request, BackgroundTasks, HTTPException, Query
-from fastapi.responses import JSONResponse, PlainTextResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse
 from pydantic import BaseModel
 from bot_webhook import ZeaburBot
 from wecom_cs_handler import CSMessageHandler
@@ -152,20 +152,69 @@ async def shutdown():
         logger.info("輪詢器已停止")
 
 
-@app.get("/")
+@app.get("/", response_class=HTMLResponse)
 async def root():
-    """健康檢查"""
-    return {
-        "status": "ok",
-        "service": "家長學堂課程推送 Bot",
-        "version": "3.0.0",
-        "primary_channel": "whatsapp",
-        "channels": {
-            "wecom_cs": bool(get_cs_handler().api) if get_cs_handler() else False,
-            "whatsapp": wa_is_configured(),
-        },
-        "time": datetime.now().isoformat(),
-    }
+    """Public landing page for business verification and parents."""
+    return """<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>家長學堂 WhatsApp 課程小助手</title>
+  <meta name="description" content="透過 WhatsApp 查詢澳門家長學堂課程，按孩子年齡和課程類型篩選並取得官方報名連結。">
+  <style>
+    body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #1f2933; background: #f7f7f2; }
+    main { max-width: 760px; margin: 0 auto; padding: 56px 24px; }
+    h1 { font-size: 34px; line-height: 1.2; margin: 0 0 16px; }
+    p { font-size: 18px; line-height: 1.7; margin: 0 0 16px; }
+    .panel { background: #fff; border: 1px solid #d9ded7; border-radius: 8px; padding: 24px; margin-top: 28px; }
+    .button { display: inline-block; background: #0f8f5f; color: #fff; text-decoration: none; padding: 12px 18px; border-radius: 6px; font-weight: 700; }
+    .qr { width: 220px; max-width: 100%; border-radius: 8px; border: 1px solid #d9ded7; margin-top: 12px; }
+    .small { font-size: 14px; color: #52616b; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>家長學堂 WhatsApp 課程小助手</h1>
+    <p>這是一個協助家長查詢澳門家長學堂課程的 WhatsApp 小助手。家長可以按孩子年齡、親子課、家長講座、青少年課程等條件查詢，並取得官方報名連結。</p>
+    <p>課程資料來自澳門教育及青年發展局家長學堂公開課程頁面，實際名額、時間和報名狀態以官方網站為準。</p>
+    <div class="panel">
+      <p>WhatsApp 使用方式：</p>
+      <p>輸入「課程」、「13歲有什麼課程」、「小朋友4歲，想親子課」、「更多」即可查詢。</p>
+      <a class="button" href="https://wa.me/8614714949607?text=%E8%AA%B2%E7%A8%8B">開啟 WhatsApp 查詢</a>
+      <p><img class="qr" src="/whatsapp-qr.png" alt="家長學堂 WhatsApp QR code"></p>
+    </div>
+    <div class="panel">
+      <p>私隱說明</p>
+      <p class="small">本服務只會使用家長在 WhatsApp 對話中提供的查詢內容，以便記住年齡偏好和回覆課程建議。不會出售個人資料，也不提供與家長學堂課程無關的通用 AI 問答。</p>
+    </div>
+  </main>
+</body>
+</html>"""
+
+
+@app.get("/whatsapp-qr.png")
+async def whatsapp_qr():
+    """Shareable WhatsApp QR card."""
+    qr_path = PROJECT_ROOT / "whatsapp_parent_school_qr.png"
+    if not qr_path.exists():
+        raise HTTPException(status_code=404, detail="QR code not found")
+    return FileResponse(str(qr_path), media_type="image/png")
+
+
+@app.get("/whatsapp-qr-clean.png")
+async def whatsapp_qr_clean():
+    """Clean QR image for printing or scanners that dislike styled cards."""
+    qr_path = PROJECT_ROOT / "whatsapp_parent_school_qr_clean.png"
+    if not qr_path.exists():
+        raise HTTPException(status_code=404, detail="QR code not found")
+    return FileResponse(str(qr_path), media_type="image/png")
+
+
+@app.head("/", response_class=HTMLResponse)
+async def root_head():
+    """Allow website validators to probe the landing page with HEAD."""
+    return ""
 
 
 @app.get("/health")

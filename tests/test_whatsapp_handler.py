@@ -670,6 +670,33 @@ class WhatsAppHandlerTests(unittest.TestCase):
         user_payload = json.loads(payload["messages"][1]["content"])
         self.assertIn("detail_url", user_payload["候選課程"][0])
 
+    def test_deepseek_reply_repairs_dsedj_registered_symbol_link(self):
+        handler, sent = self.make_handler()
+        broken_link = (
+            "https://portal.dsedj.gov.mo/webdsejspace/addon/allmain/msgfunc/"
+            "Msg_funclink_parentacademy_page.jsp?msg_id=713092®status=報名中&langsel=C"
+        )
+
+        with patch.dict(os.environ, {"DEEPSEEK_API_KEY": "test-key"}, clear=False):
+            with patch("whatsapp_handler.requests.post") as post:
+                post.return_value.status_code = 200
+                post.return_value.json.return_value = {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": f"推薦這個課程，報名連結：{broken_link}"
+                            }
+                        }
+                    ]
+                }
+
+                handler._handle_text_message("85360000000", "小朋友1歲，想親子活動")
+
+        self.assertIn("?regstatus=", sent[0][1])
+        self.assertIn("&msg_id=713092", sent[0][1])
+        self.assertIn("%E5%A0%B1%E5%90%8D%E4%B8%AD", sent[0][1])
+        self.assertNotIn("®status", sent[0][1])
+
     def test_meta_signature_verification(self):
         body = b'{"object":"whatsapp_business_account"}'
         secret = "app-secret"
@@ -792,8 +819,13 @@ class WhatsAppHandlerTests(unittest.TestCase):
     def test_root_reports_whatsapp_first_version(self):
         result = asyncio.run(api_server.root())
 
-        self.assertEqual(result["version"], "3.0.0")
-        self.assertEqual(result["primary_channel"], "whatsapp")
+        self.assertIn("家長學堂 WhatsApp 課程小助手", result)
+        self.assertIn("https://wa.me/8614714949607", result)
+
+    def test_root_head_allows_website_validators(self):
+        result = asyncio.run(api_server.root_head())
+
+        self.assertEqual(result, "")
 
 
 class FakeRequest:

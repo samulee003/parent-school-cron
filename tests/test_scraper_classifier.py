@@ -6,7 +6,7 @@ ROOT = os.path.dirname(os.path.dirname(__file__))
 sys.path.insert(0, os.path.join(ROOT, "src"))
 
 from classifier import CourseClassifier
-from scraper import Course, CourseScraper
+from scraper import Course, CourseScraper, normalize_course_detail_url
 
 
 class FakeResponse:
@@ -35,6 +35,57 @@ class ScraperClassifierTests(unittest.TestCase):
         self.assertEqual(courses, [])
         self.assertEqual(total_pages, 8)
         self.assertEqual(captured["data"]["pageis"], "2")
+
+    def test_course_detail_url_is_safe_for_whatsapp(self):
+        scraper = CourseScraper()
+
+        def fake_post(url, data, timeout):
+            return FakeResponse(
+                """
+                <html><body>
+                  <p>(1/1)</p>
+                  <table id="result">
+                    <tr><th>ID</th><th>名稱</th><th>日期</th><th>標籤</th><th>狀態</th></tr>
+                    <tr>
+                      <td title="713092"></td>
+                      <td>
+                        <a class="act_title" onclick="changeIframeURL('/webdsejspace/addon/allmain/msgfunc/Msg_funclink_parentacademy_page.jsp?msg_id=713092&regstatus=報名中&langsel=C')">健康情緒與青少年同行</a>
+                      </td>
+                      <td>2026/05/31 星期日 10:30-12:00</td>
+                      <td>
+                        <span class="badge">13-18歲</span>
+                        <span class="badge">身心健康</span>
+                        <span class="badge">家長</span>
+                      </td>
+                      <td data-status="報名中"></td>
+                    </tr>
+                  </table>
+                </body></html>
+                """
+            )
+
+        scraper.session.post = fake_post
+
+        courses, _ = scraper._fetch_page(page=1, status="報名中")
+
+        self.assertEqual(len(courses), 1)
+        self.assertIn("?regstatus=", courses[0].detail_url)
+        self.assertIn("&msg_id=713092", courses[0].detail_url)
+        self.assertIn("%E5%A0%B1%E5%90%8D%E4%B8%AD", courses[0].detail_url)
+        self.assertNotIn("&regstatus", courses[0].detail_url)
+        self.assertNotIn("®", courses[0].detail_url)
+
+    def test_normalize_repairs_registered_symbol_link(self):
+        broken = (
+            "https://portal.dsedj.gov.mo/webdsejspace/addon/allmain/msgfunc/"
+            "Msg_funclink_parentacademy_page.jsp?msg_id=713092®status=報名中&langsel=C"
+        )
+
+        fixed = normalize_course_detail_url(broken)
+
+        self.assertIn("?regstatus=", fixed)
+        self.assertIn("&msg_id=713092", fixed)
+        self.assertNotIn("®status", fixed)
 
     def test_classifier_groups_multi_age_course_into_every_matching_age(self):
         course = Course(
