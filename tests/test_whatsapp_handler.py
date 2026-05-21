@@ -2148,6 +2148,16 @@ class WhatsAppHandlerTests(unittest.TestCase):
 
         self.assertIn("家長學堂 WhatsApp 課程小助手", result)
         self.assertIn("https://wa.me/8614714949607", result)
+        self.assertIn("whatsapp://send?phone=8614714949607", result)
+        self.assertIn("parent-school-bot.zeabur.app/whatsapp", result)
+        self.assertIn("MicroMessenger", result)
+
+    def test_whatsapp_share_page_handles_wechat_handoff(self):
+        result = asyncio.run(api_server.whatsapp_share_page())
+
+        self.assertIn("WeChat 內建瀏覽器", result)
+        self.assertIn("用瀏覽器打開", result)
+        self.assertIn("intent://send?phone=8614714949607", result)
 
     def test_root_head_allows_website_validators(self):
         result = asyncio.run(api_server.root_head())

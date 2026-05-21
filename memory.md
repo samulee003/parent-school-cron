@@ -43,8 +43,10 @@
 家長入口：
 
 ```text
-https://wa.me/8614714949607?text=%E8%AA%B2%E7%A8%8B
+https://parent-school-bot.zeabur.app/whatsapp
 ```
+
+這是 WeChat-friendly 分享頁：WeChat 內打開會提示用瀏覽器開啟或掃 QR；Safari/Chrome 等手機瀏覽器會自動嘗試喚起 WhatsApp app。不要把 raw `wa.me` 當成微信主分享入口。
 
 本地 QR 圖：
 
@@ -59,6 +61,8 @@ whatsapp_parent_school_qr_clean.png
 https://parent-school-bot.zeabur.app/whatsapp-qr.png
 https://parent-school-bot.zeabur.app/whatsapp-qr-clean.png
 ```
+
+QR 已改為指向 `/whatsapp` 分享頁，而不是直接指向 `wa.me`。
 
 ## Verified
 

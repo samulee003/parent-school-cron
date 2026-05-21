@@ -369,16 +369,26 @@ async def shutdown():
         logger.info("輪詢器已停止")
 
 
-@app.get("/", response_class=HTMLResponse)
-async def root():
-    """Public landing page for business verification and parents."""
-    return """<!doctype html>
+def _public_landing_html() -> str:
+    whatsapp_phone = "8614714949607"
+    share_text = "%E8%AA%B2%E7%A8%8B"
+    web_link = f"https://wa.me/{whatsapp_phone}?text={share_text}"
+    app_link = f"whatsapp://send?phone={whatsapp_phone}&text={share_text}"
+    android_intent = (
+        f"intent://send?phone={whatsapp_phone}&text={share_text}"
+        "#Intent;scheme=whatsapp;package=com.whatsapp;end"
+    )
+    share_url = "https://parent-school-bot.zeabur.app/whatsapp"
+    html = """<!doctype html>
 <html lang="zh-Hant">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>家長學堂 WhatsApp 課程小助手</title>
   <meta name="description" content="透過 WhatsApp 查詢澳門家長學堂課程，按孩子年齡和課程類型篩選並取得官方報名連結。">
+  <meta property="og:title" content="家長學堂 WhatsApp 課程小助手">
+  <meta property="og:description" content="打開 WhatsApp，輸入「課程」即可查詢澳門家長學堂課程。">
+  <meta property="og:image" content="https://parent-school-bot.zeabur.app/whatsapp-qr.png">
   <style>
     body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #1f2933; background: #f7f7f2; }
     main { max-width: 760px; margin: 0 auto; padding: 56px 24px; }
@@ -386,8 +396,11 @@ async def root():
     p { font-size: 18px; line-height: 1.7; margin: 0 0 16px; }
     .panel { background: #fff; border: 1px solid #d9ded7; border-radius: 8px; padding: 24px; margin-top: 28px; }
     .button { display: inline-block; background: #0f8f5f; color: #fff; text-decoration: none; padding: 12px 18px; border-radius: 6px; font-weight: 700; }
+    .secondary { display: inline-block; color: #0f6f4c; margin-left: 10px; }
     .qr { width: 220px; max-width: 100%; border-radius: 8px; border: 1px solid #d9ded7; margin-top: 12px; }
     .small { font-size: 14px; color: #52616b; }
+    .wechat-tip { display: none; border-left: 4px solid #0f8f5f; padding: 12px 14px; background: #edf8f1; margin: 16px 0; }
+    .copybox { user-select: all; font-size: 16px; background: #f4f5f2; padding: 10px 12px; border-radius: 6px; word-break: break-all; }
   </style>
 </head>
 <body>
@@ -398,7 +411,15 @@ async def root():
     <div class="panel">
       <p>WhatsApp 使用方式：</p>
       <p>輸入「課程」、「13歲有什麼課程」、「小朋友4歲，想親子課」、「更多」即可查詢。</p>
-      <a class="button" href="https://wa.me/8614714949607?text=%E8%AA%B2%E7%A8%8B">開啟 WhatsApp 查詢</a>
+      <div id="wechatTip" class="wechat-tip">
+        如果你正在 WeChat 裡打開，請點右上角「...」選擇用瀏覽器打開；或直接掃下面 QR code。WeChat 內建瀏覽器有時會攔截 WhatsApp app。
+      </div>
+      <p>
+        <a id="openWhatsApp" class="button" href="__WEB_LINK__">開啟 WhatsApp 查詢</a>
+        <a class="secondary" href="__SHARE_URL__">分享入口</a>
+      </p>
+      <p class="small">也可以手動加入 WhatsApp：+86 147 1494 9607，然後傳送「課程」。</p>
+      <div class="copybox">__SHARE_URL__</div>
       <p><img class="qr" src="/whatsapp-qr.png" alt="家長學堂 WhatsApp QR code"></p>
     </div>
     <div class="panel">
@@ -406,8 +427,50 @@ async def root():
       <p class="small">本服務只會使用家長在 WhatsApp 對話中提供的查詢內容，以便記住年齡偏好和回覆課程建議。不會出售個人資料，也不提供與家長學堂課程無關的通用 AI 問答。</p>
     </div>
   </main>
+  <script>
+    (function () {
+      var ua = navigator.userAgent || "";
+      var isWechat = /MicroMessenger/i.test(ua);
+      var isAndroid = /Android/i.test(ua);
+      var appLink = "__APP_LINK__";
+      var webLink = "__WEB_LINK__";
+      var androidIntent = "__ANDROID_INTENT__";
+      var button = document.getElementById("openWhatsApp");
+      if (isWechat) {
+        document.getElementById("wechatTip").style.display = "block";
+        button.href = webLink;
+        return;
+      }
+      button.href = isAndroid ? androidIntent : appLink;
+      setTimeout(function () {
+        window.location.href = isAndroid ? androidIntent : appLink;
+      }, 350);
+      setTimeout(function () {
+        if (!document.hidden) window.location.href = webLink;
+      }, 1600);
+    })();
+  </script>
 </body>
 </html>"""
+    return (
+        html
+        .replace("__APP_LINK__", app_link)
+        .replace("__ANDROID_INTENT__", android_intent)
+        .replace("__SHARE_URL__", share_url)
+        .replace("__WEB_LINK__", web_link)
+    )
+
+
+@app.get("/", response_class=HTMLResponse)
+async def root():
+    """Public landing page for business verification and parents."""
+    return _public_landing_html()
+
+
+@app.get("/whatsapp", response_class=HTMLResponse)
+async def whatsapp_share_page():
+    """WeChat-friendly WhatsApp app handoff page."""
+    return _public_landing_html()
 
 
 @app.get("/whatsapp-qr.png")

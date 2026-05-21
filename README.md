@@ -7,11 +7,14 @@
 ## 家長流程
 
 ```text
-掃 WhatsApp QR / wa.me 連結
+掃 QR / 打開 https://parent-school-bot.zeabur.app/whatsapp
   -> 發送「課程」
   -> Bot 回覆最新家長學堂課程
   -> 發送「0-2歲」「3-6歲」「7-12歲」「13-18歲」可按年齡查詢
 ```
+
+微信分享請優先使用 `/whatsapp` 分享頁，不要直接貼 raw `wa.me`。WeChat
+內建瀏覽器常會攔截外部 app，分享頁會提示使用瀏覽器開啟並提供 QR fallback。
 
 ## 支援指令
 

@@ -56,8 +56,13 @@ Parent WhatsApp message
 The public parent entry point is:
 
 ```text
-https://wa.me/8614714949607?text=%E8%AA%B2%E7%A8%8B
+https://parent-school-bot.zeabur.app/whatsapp
 ```
+
+Use this share page for WeChat, posters, and QR stickers. It shows a WeChat
+fallback instruction and tries to open the WhatsApp app from normal mobile
+browsers. The raw `wa.me` link still works as a fallback, but do not use it as
+the main WeChat sharing URL.
 
 The local QR image currently lives at:
 
