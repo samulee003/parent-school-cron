@@ -393,6 +393,7 @@ class WhatsAppHandler:
         self._last_queries: Dict[str, Dict[str, Any]] = {}
         self._profiles: Dict[str, Dict[str, Any]] = {}
         self._memory = memory_store or WhatsAppMemoryStore()
+        self._last_transcription_error: Dict[str, Any] = {}
 
     def _get_bot(self) -> Optional[ZeaburBot]:
         """惰性初始化課程查詢 bot"""
@@ -600,14 +601,17 @@ class WhatsAppHandler:
         }
 
     def _transcribe_audio_bytes(self, content: bytes, mime_type: str) -> Optional[str]:
+        self._last_transcription_error = {}
         api_key = get_openai_api_key()
         if not api_key:
             logger.info("OPENAI_API_KEY 未配置，略過 WhatsApp 語音轉文字")
+            self._last_transcription_error = {"error_code": "missing_openai_api_key"}
             return None
 
         with tempfile.TemporaryDirectory() as tmpdir:
             prepared = self._prepare_audio_for_transcription(content, mime_type, tmpdir)
             if not prepared:
+                self._last_transcription_error = {"error_code": "audio_prepare_failed"}
                 return None
 
             headers = {"Authorization": f"Bearer {api_key}"}
@@ -634,16 +638,39 @@ class WhatsAppHandler:
                         timeout=get_transcription_timeout(),
                     )
                 if resp.status_code != 200:
-                    logger.warning("OpenAI 語音轉文字失敗: %s", resp.status_code)
+                    error_type = ""
+                    error_code = ""
+                    try:
+                        error = (resp.json().get("error") or {})
+                        error_type = str(error.get("type", "") or "")
+                        error_code = str(error.get("code", "") or "")
+                    except Exception:
+                        pass
+                    self._last_transcription_error = {
+                        "status_code": resp.status_code,
+                        "error_type": error_type,
+                        "error_code": error_code,
+                    }
+                    logger.warning(
+                        "OpenAI 語音轉文字失敗: status=%s type=%s code=%s",
+                        resp.status_code,
+                        error_type,
+                        error_code,
+                    )
                     return None
                 result = resp.json()
                 transcript = str(result.get("text", "") or "").strip()
                 if not transcript:
                     logger.warning("OpenAI 語音轉文字回傳空白")
+                    self._last_transcription_error = {"error_code": "empty_transcript"}
                     return None
                 return transcript
             except Exception as exc:
                 logger.warning("OpenAI 語音轉文字異常: %s", exc)
+                self._last_transcription_error = {
+                    "error_code": "transcription_exception",
+                    "error_type": exc.__class__.__name__,
+                }
                 return None
 
     def _transcribe_audio_message(self, media_id: str, mime_type: str = "") -> Optional[str]:
@@ -697,11 +724,19 @@ class WhatsAppHandler:
                 self._handle_text_message(from_number, transcript, record_inbound=False)
                 return
 
+            transcription_error = dict(self._last_transcription_error or {})
+            flag_meta = dict(meta)
+            if transcription_error:
+                flag_meta["transcription_error"] = transcription_error
+            if transcription_error.get("error_code") == "insufficient_quota":
+                flag_summary = "家長傳來語音訊息；OpenAI 語音轉文字 quota 不足，需要補 API 額度或人工跟進。"
+            else:
+                flag_summary = "家長傳來語音訊息；語音轉文字未能完成，需要請家長改用文字或人工跟進。"
             self._memory.add_agent_flag(
                 from_number,
                 "handoff_needed",
-                "家長傳來語音訊息；語音轉文字未能完成，需要請家長改用文字或人工跟進。",
-                meta,
+                flag_summary,
+                flag_meta,
             )
             self._reply(
                 from_number,

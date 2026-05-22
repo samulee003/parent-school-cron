@@ -823,6 +823,7 @@ class WhatsAppHandlerTests(unittest.TestCase):
 
     def test_voice_note_webhook_records_transcript_and_guides_parent_when_transcription_unavailable(self):
         handler, sent = self.make_handler()
+        handler._last_transcription_error = {"error_code": "insufficient_quota"}
         payload = {
             "entry": [
                 {
@@ -861,6 +862,11 @@ class WhatsAppHandlerTests(unittest.TestCase):
         flags = handler._memory.list_agent_flags(phone="85360000000")
         self.assertEqual(flags[0]["flag_type"], "handoff_needed")
         self.assertEqual(flags[0]["meta"]["media_id"], "media-audio-1")
+        self.assertEqual(
+            flags[0]["meta"]["transcription_error"]["error_code"],
+            "insufficient_quota",
+        )
+        self.assertIn("quota 不足", flags[0]["summary"])
 
     def test_voice_note_webhook_transcribes_and_uses_course_recommendation_flow(self):
         handler, sent = self.make_handler()
