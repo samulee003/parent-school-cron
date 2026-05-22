@@ -821,6 +821,47 @@ class WhatsAppHandlerTests(unittest.TestCase):
         self.assertTrue(handler.claim_webhook_messages(payload))
         self.assertFalse(handler.claim_webhook_messages(payload))
 
+    def test_voice_note_webhook_records_transcript_and_guides_parent(self):
+        handler, sent = self.make_handler()
+        payload = {
+            "entry": [
+                {
+                    "changes": [
+                        {
+                            "value": {
+                                "messages": [
+                                    {
+                                        "id": "wamid.voice-1",
+                                        "type": "audio",
+                                        "from": "85360000000",
+                                        "audio": {
+                                            "id": "media-audio-1",
+                                            "mime_type": "audio/ogg; codecs=opus",
+                                            "voice": True,
+                                        },
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                }
+            ]
+        }
+
+        handler.handle_webhook(payload)
+
+        self.assertEqual(len(sent), 1)
+        self.assertIn("語音訊息", sent[0][1])
+        self.assertIn("語音輸入成文字", sent[0][1])
+        messages = handler._memory.get_messages("85360000000")
+        self.assertEqual([m["direction"] for m in messages], ["inbound", "outbound"])
+        self.assertEqual(messages[0]["body"], "[語音訊息]")
+        self.assertEqual(messages[0]["meta"]["message_type"], "audio")
+        self.assertTrue(messages[0]["meta"]["voice"])
+        flags = handler._memory.list_agent_flags(phone="85360000000")
+        self.assertEqual(flags[0]["flag_type"], "handoff_needed")
+        self.assertEqual(flags[0]["meta"]["media_id"], "media-audio-1")
+
     def test_detail_request_returns_link_for_visible_course(self):
         handler, sent = self.make_handler()
 

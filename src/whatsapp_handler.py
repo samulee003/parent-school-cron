@@ -433,6 +433,55 @@ class WhatsAppHandler:
             self._memory.record_message(to, "outbound", source, text)
         return sent
 
+    def _handle_non_text_message(self, from_number: str, msg: Dict[str, Any]) -> None:
+        msg_type = str(msg.get("type", "") or "unknown")
+        media = msg.get(msg_type, {}) if isinstance(msg.get(msg_type, {}), dict) else {}
+        media_id = str(media.get("id", "") or "")
+        is_voice_note = msg_type == "audio" and bool(media.get("voice"))
+        label = "語音訊息" if is_voice_note or msg_type == "audio" else f"非文字訊息：{msg_type}"
+        meta = {
+            "message_type": msg_type,
+            "media_id": media_id,
+            "voice": bool(media.get("voice")),
+        }
+        self._memory.record_message(
+            from_number,
+            "inbound",
+            "parent",
+            f"[{label}]",
+            meta=meta,
+        )
+
+        if is_voice_note or msg_type == "audio":
+            self._memory.add_agent_flag(
+                from_number,
+                "handoff_needed",
+                "家長傳來語音訊息；目前未接語音轉文字，需要請家長改用文字或人工跟進。",
+                meta,
+            )
+            self._reply(
+                from_number,
+                "我收到你的語音訊息，但我暫時未能直接聽錄音。\n\n"
+                "你可以用手機鍵盤的咪高峰 *語音輸入成文字* 再傳送；"
+                "或直接打一句，例如：\n"
+                "• *小朋友13歲，想找情緒壓力課*\n"
+                "• *小朋友4歲，想親子活動*\n\n"
+                "如果你已經是語音轉文字發送，我就會正常理解。",
+            )
+            return
+
+        self._memory.add_agent_flag(
+            from_number,
+            "uncertain",
+            "家長傳來非文字訊息，目前只能處理文字查詢。",
+            meta,
+        )
+        self._reply(
+            from_number,
+            "我目前主要支援文字查詢課程。\n"
+            "請直接傳：*小朋友幾歲，想找哪類課程*，我會幫你配對。",
+        )
+
     def send_admin_message(self, to: str, text: str) -> bool:
         """Send an operator-authored WhatsApp message and keep the transcript."""
         message = text.strip()
@@ -1925,12 +1974,8 @@ class WhatsAppHandler:
                 if from_number and text_body:
                     self._handle_text_message(from_number, text_body)
             else:
-                # 非文字消息（圖片、語音等），回覆提示
                 if from_number:
-                    self._reply(
-                        from_number,
-                        "抱歉，我目前只支援文字消息查詢課程。\n請發送 *課程* 查看最新課程資訊。"
-                    )
+                    self._handle_non_text_message(from_number, msg)
 
     @staticmethod
     def verify_challenge(
