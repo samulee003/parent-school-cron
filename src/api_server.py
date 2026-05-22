@@ -730,7 +730,7 @@ def _public_landing_html() -> str:
         <a id="openWhatsApp" class="button" href="__WEB_LINK__">開啟 WhatsApp 查詢</a>
         <a class="secondary" href="__SHARE_URL__">分享入口</a>
       </p>
-      <p class="small">也可以手動加入 WhatsApp：+86 147 1494 9607，然後傳送「課程」。</p>
+      <p class="small">如果按鈕未能打開 WhatsApp，請用手機瀏覽器開啟本頁，或直接掃下面 QR code。</p>
       <div class="copybox">__SHARE_URL__</div>
       <p><img class="qr" src="/whatsapp-qr.png" alt="悅昕心理小助手阿Sa WhatsApp QR code"></p>
     </div>

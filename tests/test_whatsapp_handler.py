@@ -2868,6 +2868,8 @@ class WhatsAppHandlerTests(unittest.TestCase):
         self.assertIn("whatsapp://send?phone=8614714949607", result)
         self.assertIn("parent-school-bot.zeabur.app/whatsapp", result)
         self.assertIn("MicroMessenger", result)
+        self.assertIn("掃下面 QR code", result)
+        self.assertNotIn("也可以手動加入 WhatsApp：+86", result)
         self.assertIn("不要輸入小朋友姓名", result)
         self.assertIn("暫停推送", result)
         self.assertIn("刪除資料", result)
