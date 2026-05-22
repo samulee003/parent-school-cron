@@ -9,6 +9,17 @@ import whatsapp_harness
 
 
 class WhatsAppHarnessTests(unittest.TestCase):
+    STABLE_DECISION_KEYS = {
+        "route",
+        "normalized_text",
+        "intent",
+        "allow_llm",
+        "llm_purpose",
+        "profile_ready",
+        "profile_patch",
+        "recommended_action",
+    }
+
     def test_off_topic_fails_closed_before_recommendation_intent(self):
         decision = whatsapp_harness.decide_message_route("推薦餐廳", {})
 
@@ -33,6 +44,7 @@ class WhatsAppHarnessTests(unittest.TestCase):
         self.assertEqual(decision["profile_patch"]["age_groups"], ["7-12歲"])
         self.assertIn("情緒壓力", decision["profile_patch"]["pain_points"])
         self.assertFalse(decision["allow_llm"])
+        self.assertEqual(decision["recommended_action"], "recommend_after_profile_update")
 
     def test_simple_bare_age_list_stays_local(self):
         decision = whatsapp_harness.decide_message_route(
@@ -43,6 +55,7 @@ class WhatsAppHarnessTests(unittest.TestCase):
         self.assertEqual(decision["route"], "local_profile_update")
         self.assertEqual(decision["profile_patch"]["age_groups"], ["3-6歲", "7-12歲"])
         self.assertFalse(decision["allow_llm"])
+        self.assertEqual(decision["recommended_action"], "recommend_after_profile_update")
 
     def test_short_ambiguous_in_domain_text_uses_llm_profile_extraction(self):
         decision = whatsapp_harness.decide_message_route(
@@ -53,6 +66,15 @@ class WhatsAppHarnessTests(unittest.TestCase):
         self.assertEqual(decision["route"], "llm_profile_extraction")
         self.assertTrue(decision["allow_llm"])
         self.assertEqual(decision["llm_purpose"], "profile_extraction")
+
+    def test_standalone_child_characters_do_not_trigger_profile_extraction(self):
+        for text in ["我想買女裝", "牛仔褲邊度買"]:
+            with self.subTest(text=text):
+                decision = whatsapp_harness.decide_message_route(text, {})
+
+                self.assertEqual(decision["route"], "unknown")
+                self.assertFalse(decision["allow_llm"])
+                self.assertEqual(decision["recommended_action"], "ask_for_supported_query")
 
     def test_ready_profile_recommendation_command_uses_bounded_recommendation(self):
         decision = whatsapp_harness.decide_message_route(
@@ -93,6 +115,37 @@ class WhatsAppHarnessTests(unittest.TestCase):
         self.assertEqual(ready_with_topic["route"], "recommend_courses")
         self.assertTrue(ready_with_target["profile_ready"])
         self.assertEqual(ready_with_target["route"], "recommend_courses")
+
+    def test_local_profile_update_recommends_next_action_for_missing_fields(self):
+        age_only = whatsapp_harness.decide_message_route("8", {})
+        concern_only = whatsapp_harness.decide_message_route("情緒", {})
+
+        self.assertEqual(age_only["route"], "local_profile_update")
+        self.assertEqual(age_only["recommended_action"], "ask_missing_concern")
+        self.assertEqual(concern_only["route"], "local_profile_update")
+        self.assertEqual(concern_only["recommended_action"], "ask_missing_age")
+
+    def test_decision_schema_is_stable_across_representative_routes(self):
+        cases = [
+            ("推薦餐廳", {}),
+            ("更多", {}),
+            ("八歲，情緒", {}),
+            ("大仔讀緊高小，細仔仲好細", {"pain_points": ["親子溝通"]}),
+            ("幫我揀", {"age_groups": ["13-18歲"], "pain_points": ["情緒壓力"]}),
+            ("你好嗎", {}),
+        ]
+
+        for text, profile in cases:
+            with self.subTest(text=text):
+                decision = whatsapp_harness.decide_message_route(text, profile)
+
+                self.assertEqual(set(decision), self.STABLE_DECISION_KEYS)
+                self.assertIsInstance(decision["intent"], str)
+                self.assertIsInstance(decision["allow_llm"], bool)
+                self.assertIsInstance(decision["llm_purpose"], str)
+                self.assertIsInstance(decision["profile_ready"], bool)
+                self.assertIsInstance(decision["profile_patch"], dict)
+                self.assertTrue(decision["recommended_action"])
 
 
 if __name__ == "__main__":

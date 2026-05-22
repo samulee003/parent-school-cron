@@ -28,8 +28,6 @@ AMBIGUOUS_PROFILE_HINTS = (
     "大仔",
     "細仔",
     "细仔",
-    "仔",
-    "女",
     "讀緊",
     "读紧",
     "讀書",
@@ -73,11 +71,24 @@ def _looks_like_ambiguous_profile_text(normalized_text: str) -> bool:
     return any(hint in normalized_text for hint in AMBIGUOUS_PROFILE_HINTS)
 
 
+def _local_profile_update_action(profile: Dict[str, Any]) -> str:
+    if _profile_ready(profile):
+        return "recommend_after_profile_update"
+    if not _has_value(profile.get("age_groups")):
+        return "ask_missing_age"
+    return "ask_missing_concern"
+
+
 def _base_decision(route: str, normalized_text: str, profile: Dict[str, Any]) -> Dict[str, Any]:
     return {
         "route": route,
         "normalized_text": normalized_text,
+        "intent": "",
+        "allow_llm": False,
+        "llm_purpose": "",
         "profile_ready": _profile_ready(profile),
+        "profile_patch": {},
+        "recommended_action": "no_action",
     }
 
 
@@ -99,7 +110,7 @@ def decide_message_route(text: str, profile: dict) -> dict:
         decision = _base_decision("local_command", normalized_text, current_profile)
         decision.update({
             "intent": local_intent,
-            "allow_llm": False,
+            "recommended_action": "execute_local_command",
         })
         return decision
 
@@ -109,7 +120,7 @@ def decide_message_route(text: str, profile: dict) -> dict:
         decision = _base_decision("local_profile_update", normalized_text, merged_profile)
         decision.update({
             "profile_patch": profile_patch,
-            "allow_llm": False,
+            "recommended_action": _local_profile_update_action(merged_profile),
         })
         return decision
 
@@ -119,6 +130,7 @@ def decide_message_route(text: str, profile: dict) -> dict:
             "intent": local_intent,
             "allow_llm": True,
             "llm_purpose": "bounded_recommendation",
+            "recommended_action": "recommend_courses",
         })
         return decision
 
@@ -127,6 +139,7 @@ def decide_message_route(text: str, profile: dict) -> dict:
         decision.update({
             "allow_llm": True,
             "llm_purpose": "profile_extraction",
+            "recommended_action": "extract_profile_with_llm",
         })
         return decision
 
