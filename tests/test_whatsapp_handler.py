@@ -821,7 +821,7 @@ class WhatsAppHandlerTests(unittest.TestCase):
         self.assertTrue(handler.claim_webhook_messages(payload))
         self.assertFalse(handler.claim_webhook_messages(payload))
 
-    def test_voice_note_webhook_records_transcript_and_guides_parent(self):
+    def test_voice_note_webhook_records_transcript_and_guides_parent_when_transcription_unavailable(self):
         handler, sent = self.make_handler()
         payload = {
             "entry": [
@@ -861,6 +861,49 @@ class WhatsAppHandlerTests(unittest.TestCase):
         flags = handler._memory.list_agent_flags(phone="85360000000")
         self.assertEqual(flags[0]["flag_type"], "handoff_needed")
         self.assertEqual(flags[0]["meta"]["media_id"], "media-audio-1")
+
+    def test_voice_note_webhook_transcribes_and_uses_course_recommendation_flow(self):
+        handler, sent = self.make_handler()
+        handler._transcribe_audio_message = (
+            lambda media_id, mime_type="": "小朋友13歲，想家長課"
+        )
+        payload = {
+            "entry": [
+                {
+                    "changes": [
+                        {
+                            "value": {
+                                "messages": [
+                                    {
+                                        "id": "wamid.voice-2",
+                                        "type": "audio",
+                                        "from": "85360000000",
+                                        "audio": {
+                                            "id": "media-audio-2",
+                                            "mime_type": "audio/ogg; codecs=opus",
+                                            "voice": True,
+                                        },
+                                    }
+                                ]
+                            }
+                        }
+                    ]
+                }
+            ]
+        }
+
+        handler.handle_webhook(payload)
+
+        self.assertEqual(len(sent), 1)
+        self.assertIn("青少年親子溝通工作坊", sent[0][1])
+        self.assertNotIn("暫時未能直接聽錄音", sent[0][1])
+        messages = handler._memory.get_messages("85360000000")
+        self.assertEqual([m["direction"] for m in messages], ["inbound", "inbound", "outbound"])
+        self.assertEqual(messages[0]["body"], "[語音訊息]")
+        self.assertEqual(messages[1]["body"], "小朋友13歲，想家長課")
+        self.assertEqual(messages[1]["meta"]["message_type"], "audio_transcription")
+        self.assertEqual(messages[1]["meta"]["media_id"], "media-audio-2")
+        self.assertEqual(handler._memory.list_agent_flags(phone="85360000000"), [])
 
     def test_detail_request_returns_link_for_visible_course(self):
         handler, sent = self.make_handler()

@@ -95,6 +95,11 @@ DEEPSEEK_DAILY_LIMIT_PER_USER
 DEEPSEEK_DAILY_LIMIT_GLOBAL
 WHATSAPP_PROACTIVE_TEMPLATE_NAME
 WHATSAPP_PROACTIVE_TEMPLATE_LANGUAGE
+WHATSAPP_AUDIO_MAX_BYTES
+OPENAI_API_KEY
+OPENAI_BASE_URL
+OPENAI_TRANSCRIPTION_MODEL
+OPENAI_TRANSCRIPTION_TIMEOUT
 CRON_SECRET
 ADMIN_SECRET
 WXAGENT_DATA_DIR
@@ -185,6 +190,10 @@ Default WhatsApp behavior:
 - If the user says `更多`, `下一頁`, or `還有嗎`, continue the last persisted query.
 - If the user asks for all courses, paginate compactly.
 - Always include official detail links in course replies.
+- WhatsApp voice notes should be transcribed before recommendation when
+  `OPENAI_API_KEY` is configured; if transcription fails, record the audio
+  placeholder, add a handoff flag, and ask the parent to use text or keyboard
+  voice dictation.
 - When agentic recommendation is enabled, use course detail summaries for pain-point
   matching. Do not match only by course name.
 - Prefer the real registration URL from the detail page when available; fall back to

@@ -34,6 +34,7 @@
 - `/admin` 已有隱私清理入口，可先預覽再清理舊 transcript、LLM cache、WhatsApp 去重紀錄、已解決 flags 和已關閉推送紀錄；不會刪家長 profile 或未發草稿。
 - WhatsApp 端已能直接更新主動推送同意：家長回覆 `同意推送` / `同意收課程提醒` 會變 `allowed`，回覆 `暫停推送` 會變 `paused`。
 - 已有 WhatsApp template 發送通道：主動草稿若超出 24 小時 customer service window，會自動改用 `WHATSAPP_PROACTIVE_TEMPLATE_NAME`；未配置模板時會阻止發送。
+- WhatsApp 語音訊息已接入語音轉文字路徑：收到 `audio` media 時會先下載音訊、必要時用 ffmpeg 轉成 OpenAI 支援格式，透過 OpenAI transcriptions 產生文字，再走原本家長學堂推薦流程；若未配置或轉錄失敗，會保留語音 transcript 佔位、建立 handoff flag，並請家長改用文字或手機鍵盤語音輸入。
 - WhatsApp webhook 預設 fail-closed：缺 `WHATSAPP_APP_SECRET` 時拒絕處理 POST webhook；若線上仍未取得 Meta App Secret，可暫時明確設 `WHATSAPP_ALLOW_UNSIGNED_WEBHOOK=true` 維持舊行為，補上 App Secret 後要關掉。
 - `/admin` 已改為登入頁 + HttpOnly cookie；WhatsApp 管理 API 不再靠 URL query secret。
 - DeepSeek 回覆已加 URL allowlist：只允許候選課程提供的 `reply_url` / `registration_url` / `detail_url`，否則 fallback 到規則式推薦。
@@ -149,6 +150,7 @@ git diff --check
 - Operator-approved proactive draft send endpoint.
 - Persistent proactive draft queue/history.
 - WhatsApp-side consent capture commands.
+- WhatsApp voice-note transcription via OpenAI transcriptions when configured.
 - WhatsApp template payload sending for proactive messages outside the 24-hour window.
 - WhatsApp webhook fail-closed signature enforcement with an explicit temporary unsigned compatibility flag.
 - Admin dashboard login cookie and Authorization Bearer support for admin APIs.

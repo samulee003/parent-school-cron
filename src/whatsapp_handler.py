@@ -11,6 +11,9 @@ import hmac
 import inspect
 import json
 import re
+import shutil
+import subprocess
+import tempfile
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 import requests
@@ -228,6 +231,36 @@ def get_proactive_template_language() -> str:
     return os.environ.get("WHATSAPP_PROACTIVE_TEMPLATE_LANGUAGE", "zh_HK").strip() or "zh_HK"
 
 
+def get_openai_api_key() -> str:
+    return os.environ.get("OPENAI_API_KEY", "").strip()
+
+
+def get_openai_base_url() -> str:
+    return os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
+
+
+def get_transcription_model() -> str:
+    return os.environ.get("OPENAI_TRANSCRIPTION_MODEL", "gpt-4o-mini-transcribe").strip() or "gpt-4o-mini-transcribe"
+
+
+def get_audio_max_bytes() -> int:
+    raw_limit = os.environ.get("WHATSAPP_AUDIO_MAX_BYTES", "25000000")
+    try:
+        return max(int(raw_limit), 1)
+    except ValueError:
+        logger.warning("WHATSAPP_AUDIO_MAX_BYTES 無效，使用預設值 25000000")
+        return 25_000_000
+
+
+def get_transcription_timeout() -> int:
+    raw_timeout = os.environ.get("OPENAI_TRANSCRIPTION_TIMEOUT", "60")
+    try:
+        return max(int(raw_timeout), 5)
+    except ValueError:
+        logger.warning("OPENAI_TRANSCRIPTION_TIMEOUT 無效，使用預設值 60")
+        return 60
+
+
 def is_valid_meta_signature(payload: bytes, signature_header: str, app_secret: str) -> bool:
     """驗證 Meta Webhook 的 X-Hub-Signature-256。"""
     if not payload or not signature_header or not app_secret:
@@ -433,16 +466,207 @@ class WhatsAppHandler:
             self._memory.record_message(to, "outbound", source, text)
         return sent
 
+    @staticmethod
+    def _audio_suffix_from_mime(mime_type: str) -> str:
+        mime = (mime_type or "").lower()
+        if "mpeg" in mime or "mp3" in mime:
+            return ".mp3"
+        if "mp4" in mime:
+            return ".mp4"
+        if "mpga" in mime:
+            return ".mpga"
+        if "m4a" in mime:
+            return ".m4a"
+        if "wav" in mime:
+            return ".wav"
+        if "webm" in mime:
+            return ".webm"
+        if "ogg" in mime or "opus" in mime:
+            return ".ogg"
+        return ".bin"
+
+    @staticmethod
+    def _openai_upload_mime_for_suffix(suffix: str) -> str:
+        return {
+            ".mp3": "audio/mpeg",
+            ".mp4": "audio/mp4",
+            ".mpeg": "audio/mpeg",
+            ".mpga": "audio/mpeg",
+            ".m4a": "audio/mp4",
+            ".wav": "audio/wav",
+            ".webm": "audio/webm",
+        }.get(suffix, "application/octet-stream")
+
+    @staticmethod
+    def _is_openai_supported_audio_suffix(suffix: str) -> bool:
+        return suffix in {".mp3", ".mp4", ".mpeg", ".mpga", ".m4a", ".wav", ".webm"}
+
+    def _download_whatsapp_media(self, media_id: str) -> Optional[Dict[str, Any]]:
+        if not media_id or not self.access_token:
+            return None
+
+        headers = {"Authorization": f"Bearer {self.access_token}"}
+        try:
+            meta_resp = requests.get(
+                f"{get_graph_api_base()}/{media_id}",
+                headers=headers,
+                timeout=20,
+            )
+            if meta_resp.status_code != 200:
+                logger.warning("WhatsApp media metadata 下載失敗: %s", meta_resp.status_code)
+                return None
+            meta = meta_resp.json()
+            media_url = str(meta.get("url", "") or "")
+            mime_type = str(meta.get("mime_type", "") or "")
+            file_size = int(meta.get("file_size") or 0)
+            if not media_url:
+                logger.warning("WhatsApp media metadata 缺少 url")
+                return None
+            max_bytes = get_audio_max_bytes()
+            if file_size and file_size > max_bytes:
+                logger.warning("WhatsApp audio 超過大小限制: %s bytes", file_size)
+                return None
+
+            media_resp = requests.get(media_url, headers=headers, timeout=30)
+            if media_resp.status_code != 200:
+                logger.warning("WhatsApp media 下載失敗: %s", media_resp.status_code)
+                return None
+            content = media_resp.content or b""
+            if not content:
+                logger.warning("WhatsApp media 下載內容為空")
+                return None
+            if len(content) > max_bytes:
+                logger.warning("WhatsApp audio 超過大小限制: %s bytes", len(content))
+                return None
+            if not mime_type:
+                mime_type = str(media_resp.headers.get("Content-Type", "") or "")
+            return {"content": content, "mime_type": mime_type}
+        except Exception as exc:
+            logger.warning("WhatsApp media 下載異常: %s", exc)
+            return None
+
+    def _prepare_audio_for_transcription(
+        self,
+        content: bytes,
+        mime_type: str,
+        tmpdir: str,
+    ) -> Optional[Dict[str, str]]:
+        suffix = self._audio_suffix_from_mime(mime_type)
+        source_path = os.path.join(tmpdir, f"whatsapp-audio{suffix}")
+        with open(source_path, "wb") as f:
+            f.write(content)
+
+        if self._is_openai_supported_audio_suffix(suffix):
+            return {
+                "path": source_path,
+                "filename": f"whatsapp-audio{suffix}",
+                "mime_type": self._openai_upload_mime_for_suffix(suffix),
+            }
+
+        ffmpeg_path = shutil.which("ffmpeg")
+        if not ffmpeg_path:
+            logger.warning("WhatsApp audio 是 %s，但環境沒有 ffmpeg 可轉檔", mime_type or suffix)
+            return None
+
+        output_path = os.path.join(tmpdir, "whatsapp-audio.webm")
+        try:
+            subprocess.run(
+                [
+                    ffmpeg_path,
+                    "-y",
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-i",
+                    source_path,
+                    "-vn",
+                    "-c:a",
+                    "libopus",
+                    output_path,
+                ],
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                timeout=30,
+            )
+        except Exception as exc:
+            logger.warning("WhatsApp audio 轉檔失敗: %s", exc)
+            return None
+
+        return {
+            "path": output_path,
+            "filename": "whatsapp-audio.webm",
+            "mime_type": "audio/webm",
+        }
+
+    def _transcribe_audio_bytes(self, content: bytes, mime_type: str) -> Optional[str]:
+        api_key = get_openai_api_key()
+        if not api_key:
+            logger.info("OPENAI_API_KEY 未配置，略過 WhatsApp 語音轉文字")
+            return None
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            prepared = self._prepare_audio_for_transcription(content, mime_type, tmpdir)
+            if not prepared:
+                return None
+
+            headers = {"Authorization": f"Bearer {api_key}"}
+            data = {
+                "model": get_transcription_model(),
+                "response_format": "json",
+                "language": "zh",
+                "prompt": "這是一段家長用粵語或繁體中文詢問澳門家長學堂課程、孩子年齡、親子溝通、學習或情緒需要的語音。",
+            }
+            try:
+                with open(prepared["path"], "rb") as f:
+                    files = {
+                        "file": (
+                            prepared["filename"],
+                            f,
+                            prepared["mime_type"],
+                        )
+                    }
+                    resp = requests.post(
+                        f"{get_openai_base_url()}/audio/transcriptions",
+                        headers=headers,
+                        data=data,
+                        files=files,
+                        timeout=get_transcription_timeout(),
+                    )
+                if resp.status_code != 200:
+                    logger.warning("OpenAI 語音轉文字失敗: %s", resp.status_code)
+                    return None
+                result = resp.json()
+                transcript = str(result.get("text", "") or "").strip()
+                if not transcript:
+                    logger.warning("OpenAI 語音轉文字回傳空白")
+                    return None
+                return transcript
+            except Exception as exc:
+                logger.warning("OpenAI 語音轉文字異常: %s", exc)
+                return None
+
+    def _transcribe_audio_message(self, media_id: str, mime_type: str = "") -> Optional[str]:
+        media = self._download_whatsapp_media(media_id)
+        if not media:
+            return None
+        return self._transcribe_audio_bytes(
+            bytes(media.get("content") or b""),
+            str(media.get("mime_type") or mime_type or ""),
+        )
+
     def _handle_non_text_message(self, from_number: str, msg: Dict[str, Any]) -> None:
         msg_type = str(msg.get("type", "") or "unknown")
         media = msg.get(msg_type, {}) if isinstance(msg.get(msg_type, {}), dict) else {}
         media_id = str(media.get("id", "") or "")
+        mime_type = str(media.get("mime_type", "") or "")
         is_voice_note = msg_type == "audio" and bool(media.get("voice"))
         label = "語音訊息" if is_voice_note or msg_type == "audio" else f"非文字訊息：{msg_type}"
         meta = {
             "message_type": msg_type,
             "media_id": media_id,
             "voice": bool(media.get("voice")),
+            "mime_type": mime_type,
         }
         self._memory.record_message(
             from_number,
@@ -453,10 +677,30 @@ class WhatsAppHandler:
         )
 
         if is_voice_note or msg_type == "audio":
+            if self._memory.is_human_takeover(from_number):
+                logger.info("AI 已暫停，自動略過 WhatsApp 語音 from=%s", from_number)
+                return
+
+            transcript = self._transcribe_audio_message(media_id, mime_type)
+            if transcript:
+                self._memory.record_message(
+                    from_number,
+                    "inbound",
+                    "parent",
+                    transcript,
+                    meta={
+                        "message_type": "audio_transcription",
+                        "media_id": media_id,
+                        "original_mime_type": mime_type,
+                    },
+                )
+                self._handle_text_message(from_number, transcript, record_inbound=False)
+                return
+
             self._memory.add_agent_flag(
                 from_number,
                 "handoff_needed",
-                "家長傳來語音訊息；目前未接語音轉文字，需要請家長改用文字或人工跟進。",
+                "家長傳來語音訊息；語音轉文字未能完成，需要請家長改用文字或人工跟進。",
                 meta,
             )
             self._reply(
@@ -1812,12 +2056,13 @@ class WhatsAppHandler:
             lines.append(f"🔗 {link}")
         return "\n".join(lines)
 
-    def _handle_text_message(self, from_number: str, text: str) -> None:
+    def _handle_text_message(self, from_number: str, text: str, record_inbound: bool = True) -> None:
         """處理家長發送的文字消息"""
         text_lower = text.strip().lower()
         normalized = self._normalize_command(text)
         logger.info(f"收到消息 from={from_number}: {text}")
-        self._memory.record_message(from_number, "inbound", "parent", text)
+        if record_inbound:
+            self._memory.record_message(from_number, "inbound", "parent", text)
 
         if self._memory.is_human_takeover(from_number):
             logger.info("AI 已暫停，自動略過 from=%s", from_number)
