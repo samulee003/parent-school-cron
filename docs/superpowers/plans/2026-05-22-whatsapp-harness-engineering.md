@@ -35,7 +35,7 @@ The harness exists to make these promises true:
 - LLM never invents courses, dates, registration status, links, or quota state.
 - LLM never answers restaurant, weather, investment, homework, translation, coding, or generic chat requests.
 - Local rules handle commands, obvious ages, obvious topics, pagination, consent, reset, and hard off-topic cases before any token is spent.
-- LLM handles only natural in-domain ambiguity, such as `8 and 6`, `大仔小學細仔幼稚園`, `成日爆喊`, `升中好焦慮`, or ASR text with mixed Mandarin/Cantonese.
+- LLM handles only natural in-domain ambiguity that local rules cannot parse, such as `one kid is primary and another is teen`, `成日爆喊`, `升中好焦慮`, or ASR text with unclear mixed Mandarin/Cantonese.
 - If the profile is incomplete, the bot asks one short missing-field question instead of dumping courses.
 - If confidence is low, the bot creates an admin flag or asks a clarification question instead of pretending to know.
 - Every change is backed by golden tests, and every production miss can become an eval case.
@@ -79,7 +79,7 @@ Use local rules for:
 Use LLM profile extraction for:
 
 - Short in-domain natural language that local rules cannot fully parse.
-- Mixed language age phrases: `8 and 6`, `one kid is 4 and one is 12`.
+- Mixed language age phrases that local rules cannot parse, such as `one kid is 4 and one is 12`.
 - Family structure phrases: `大仔中學，細仔幼稚園`.
 - Pain descriptions without exact keywords: `成日爆喊`, `好難坐定`, `青春期好難溝通`, `升中好焦慮`.
 - ASR transcript that is short, parent-school related, and not already solved locally.
@@ -528,8 +528,15 @@ class WhatsAppHarnessTests(unittest.TestCase):
         self.assertEqual(decision["profile_patch"]["age_groups"], ["7-12歲"])
         self.assertIn("情緒壓力", decision["profile_patch"]["pain_points"])
 
-    def test_short_ambiguous_in_domain_routes_to_llm_extraction(self):
+    def test_short_bare_age_list_routes_locally_without_llm(self):
         decision = decide_message_route("8 and 6", profile={"pain_points": ["親子溝通"]})
+
+        self.assertEqual(decision["route"], "local_profile_update")
+        self.assertFalse(decision["allow_llm"])
+        self.assertEqual(decision["profile_patch"]["age_groups"], ["3-6歲", "7-12歲"])
+
+    def test_short_ambiguous_in_domain_routes_to_llm_extraction(self):
+        decision = decide_message_route("大仔讀緊高小，細仔仲好細", profile={"pain_points": ["親子溝通"]})
 
         self.assertEqual(decision["route"], "llm_profile_extraction")
         self.assertTrue(decision["allow_llm"])
@@ -1024,8 +1031,9 @@ Create `tests/fixtures/whatsapp_harness_cases.json`:
     "name": "english_two_ages_with_existing_concern",
     "input": "8 and 6",
     "profile": {"pain_points": ["親子溝通"]},
-    "expected_route": "llm_profile_extraction",
-    "expected_allow_llm": true
+    "expected_route": "local_profile_update",
+    "expected_age_groups": ["3-6歲", "7-12歲"],
+    "expected_allow_llm": false
   },
   {
     "name": "hard_off_topic_restaurant",
