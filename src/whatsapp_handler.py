@@ -2082,6 +2082,17 @@ class WhatsAppHandler:
             return {}
 
         options = self.admin_profile_options()
+        schema = {
+            "in_domain": "boolean；與澳門家長學堂課程偏好、孩子年齡、家長痛點、課程主題或對象有關才 true",
+            "is_course_related": "boolean；保留給舊版相容，與 in_domain 同義",
+            "age_groups": options["age_groups"],
+            "pain_points": options["pain_points"],
+            "topic": options["topics"],
+            "target": options["targets"],
+            "pain_summary": "string；最多一句，概括家長困擾",
+            "confidence": "number；0 到 1",
+            "clarifying_question": "string；低信心且未能抽取欄位時，向家長追問一題",
+        }
         messages = [
             {
                 "role": "system",
@@ -2090,11 +2101,11 @@ class WhatsAppHandler:
                     "你的任務不是聊天，而是把家長自然語句轉成可用 profile。"
                     "只抽取與孩子年齡、家長痛點、課程主題、對象有關的資訊。"
                     "如果是餐廳、天氣、投資、功課、翻譯、寫程式等無關問題，"
-                    "回傳 is_course_related=false。"
+                    "回傳 in_domain=false 及 is_course_related=false。"
                     "可接受粵語、國語、英文混合，例如 '8 and 6' 代表孩子 8 歲和 6 歲。"
-                    "age_groups 只能用：0-2歲, 3-6歲, 7-12歲, 13-18歲。"
-                    "pain_points、topic、target 只能使用用戶提供選項。"
-                    "不要創造其他值。不要輸出 markdown。"
+                    "age_groups、pain_points、topic、target 只能使用用戶提供選項。"
+                    "不要創造其他值。低信心但仍屬課程偏好語境時，"
+                    "如果未能抽取有效欄位，請提供 clarifying_question。不要輸出 markdown。"
                 ),
             },
             {
@@ -2107,7 +2118,9 @@ class WhatsAppHandler:
                         "可選pain_points": options["pain_points"],
                         "可選topics": options["topics"],
                         "可選targets": options["targets"],
-                        "輸出JSON格式": {
+                        "輸出JSON schema": schema,
+                        "輸出JSON範例": {
+                            "in_domain": True,
                             "is_course_related": True,
                             "age_groups": [],
                             "pain_points": [],
@@ -2115,6 +2128,7 @@ class WhatsAppHandler:
                             "target": "",
                             "pain_summary": "",
                             "confidence": 0.0,
+                            "clarifying_question": "",
                         },
                     },
                     ensure_ascii=False,
@@ -2123,7 +2137,10 @@ class WhatsAppHandler:
         ]
         raw = self._call_deepseek(messages, max_tokens=320)
         payload = self._extract_json_object(raw or "")
-        if not payload or payload.get("is_course_related") is False:
+        if not payload:
+            return {}
+        in_domain = payload.get("in_domain", payload.get("is_course_related"))
+        if in_domain is False:
             return {}
 
         valid_age_groups = set(options["age_groups"])
@@ -2157,6 +2174,17 @@ class WhatsAppHandler:
             extracted["target"] = target
         if pain_summary:
             extracted["pain_summary"] = pain_summary[:180]
+        try:
+            confidence = float(payload.get("confidence", 1.0))
+        except (TypeError, ValueError):
+            confidence = 1.0
+        clarifying_question = str(payload.get("clarifying_question", "") or "").strip()
+        if (
+            in_domain is True
+            and confidence < 0.45
+            and not extracted
+        ):
+            extracted["__clarifying_question"] = clarifying_question or self._onboarding_text(profile)
         return extracted
 
     def _update_profile_from_llm_text(
@@ -2168,6 +2196,8 @@ class WhatsAppHandler:
         extracted = self._llm_extract_profile_update(from_number, text, profile)
         if not extracted:
             return profile
+        if extracted.get("__clarifying_question"):
+            return extracted
 
         updated = dict(profile)
         if extracted.get("age_groups"):
@@ -2509,7 +2539,9 @@ class WhatsAppHandler:
             )
         else:
             llm_profile = self._update_profile_from_llm_text(from_number, text, profile)
-            if llm_profile != profile:
+            if llm_profile.get("__clarifying_question"):
+                reply = str(llm_profile["__clarifying_question"])
+            elif llm_profile != profile:
                 profile = llm_profile
                 reply = self._get_agentic_recommendation_text(from_number, profile, text)
             else:
