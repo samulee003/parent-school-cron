@@ -212,6 +212,92 @@ class WhatsAppHandlerTests(unittest.TestCase):
         self.assertEqual(detect_age_groups("十三歲，情緒"), ["13-18歲"])
         self.assertEqual(detect_age_groups("兩歲和十歲"), ["0-2歲", "7-12歲"])
 
+    def test_llm_semantic_extraction_handles_natural_age_reply(self):
+        courses = [
+            Course(
+                id="c-kids",
+                name="兒童情緒管理工作坊",
+                date="2026/06/21 星期日 10:00-11:30",
+                date_parsed=None,
+                age_group="7-12歲",
+                age_groups=["7-12歲"],
+                topic="身心健康",
+                target="家長",
+                status="報名中",
+                detail_url="https://example.test/course/kids",
+                summary="協助家長理解兒童情緒壓力，學習陪伴和溝通方法。",
+            ),
+            Course(
+                id="c-young",
+                name="幼兒情緒與親子陪伴",
+                date="2026/06/22 星期一 10:00-11:30",
+                date_parsed=None,
+                age_group="3-6歲",
+                age_groups=["3-6歲"],
+                topic="身心健康",
+                target="家長",
+                status="報名中",
+                detail_url="https://example.test/course/young",
+                summary="協助家長理解幼兒情緒壓力和親子陪伴。",
+            ),
+        ]
+        handler = WhatsAppHandler()
+        handler._get_bot = lambda: type("Bot", (), {"scraper": FakeCrawler(courses)})()
+        sent = []
+        handler._send_text = lambda to, text: sent.append((to, text)) or True
+
+        class FakeDeepSeekResponse:
+            status_code = 200
+            text = "ok"
+
+            def __init__(self, content):
+                self._content = content
+
+            def json(self):
+                return {"choices": [{"message": {"content": self._content}}]}
+
+        extraction = json.dumps(
+            {
+                "is_course_related": True,
+                "age_groups": ["7-12歲", "3-6歲"],
+                "pain_points": [],
+                "topic": "",
+                "target": "",
+                "pain_summary": "",
+                "confidence": 0.82,
+            },
+            ensure_ascii=False,
+        )
+        with patch.dict(
+            os.environ,
+            {"DEEPSEEK_API_KEY": "test-key", "DEEPSEEK_DAILY_LIMIT_PER_USER": "4"},
+            clear=False,
+        ):
+            with patch("whatsapp_handler.requests.post") as post:
+                post.side_effect = [
+                    FakeDeepSeekResponse(extraction),
+                    FakeDeepSeekResponse("LLM 推薦：兒童情緒管理工作坊"),
+                ]
+                handler._handle_text_message("85360000000", "情緒")
+                handler._handle_text_message("85360000000", "8 and 6")
+
+        profile = handler._memory.get_profile("85360000000")
+        self.assertEqual(profile["age_groups"], ["7-12歲", "3-6歲"])
+        self.assertIn("情緒壓力", profile["pain_points"])
+        self.assertTrue(sent[-1][1].startswith("LLM 推薦"))
+        self.assertNotIn("未能轉成課程條件", sent[-1][1])
+        self.assertEqual(post.call_count, 2)
+
+    def test_greeting_does_not_use_llm_semantic_extraction(self):
+        handler, sent = self.make_handler()
+
+        with patch.dict(os.environ, {"DEEPSEEK_API_KEY": "test-key"}, clear=False):
+            with patch("whatsapp_handler.requests.post") as post:
+                handler._handle_text_message("85360000000", "hi")
+
+        self.assertFalse(post.called)
+        self.assertIn("澳門家長學堂課程助手", sent[0][1])
+
     def test_onboarding_age_only_asks_for_concern_without_calling_deepseek(self):
         handler, sent = self.make_handler()
 

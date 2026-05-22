@@ -110,6 +110,7 @@ OUT_OF_SCOPE_AI_KEYWORDS = (
     "人工智能", "ai工具", "ai 工具", "大模型", "論文", "论文",
 )
 LONG_MESSAGE_OFF_TOPIC_CHARS = 120
+LLM_PROFILE_EXTRACTION_MAX_CHARS = 180
 PAIN_POINT_RULES = [
     {
         "tag": "情緒壓力",
@@ -2153,6 +2154,194 @@ class WhatsAppHandler:
             logger.warning("DeepSeek API 異常: %s", e)
             return None
 
+    @staticmethod
+    def _extract_json_object(text: str) -> Dict[str, Any]:
+        raw = str(text or "").strip()
+        if not raw:
+            return {}
+        raw = re.sub(r"^```(?:json)?\s*", "", raw)
+        raw = re.sub(r"\s*```$", "", raw)
+        try:
+            payload = json.loads(raw)
+            return payload if isinstance(payload, dict) else {}
+        except json.JSONDecodeError:
+            pass
+        match = re.search(r"\{.*\}", raw, re.S)
+        if not match:
+            return {}
+        try:
+            payload = json.loads(match.group(0))
+        except json.JSONDecodeError:
+            return {}
+        return payload if isinstance(payload, dict) else {}
+
+    def _consume_llm_quota(self, from_number: str) -> bool:
+        daily_limit = get_deepseek_daily_limit_per_user()
+        global_limit = get_deepseek_daily_limit_global()
+        consumed = self._memory.try_consume_llm_quotas(
+            from_number,
+            per_user_daily_limit=daily_limit,
+            global_daily_limit=global_limit,
+        )
+        if not consumed:
+            logger.info(
+                "DeepSeek 每日限額已達 from=%s usage=%s limit=%s global_usage=%s global_limit=%s",
+                from_number,
+                self._memory.get_llm_usage_count(from_number),
+                daily_limit,
+                self._memory.get_llm_usage_count("__global__"),
+                global_limit,
+            )
+        return consumed
+
+    @staticmethod
+    def _looks_like_onboarding_reply(text: str, profile: Dict[str, Any]) -> bool:
+        normalized = WhatsAppHandler._normalize_command(text)
+        if not normalized:
+            return False
+        if len(normalized) > LLM_PROFILE_EXTRACTION_MAX_CHARS:
+            return False
+        if normalized in {"ok", "okay", "好", "好的", "收到", "謝謝", "谢谢", "thanks", "thank you"}:
+            return False
+        if any(ch.isdigit() for ch in normalized):
+            return True
+        if re.search(r"[零〇一二兩两三四五六七八九十]{1,3}\s*歲", normalized):
+            return True
+        if any(k in normalized for k in ["歲", "岁", "小朋友", "孩子", "仔", "女", "情緒", "學習", "升學", "親子", "溝通", "壓力", "搵", "找"]):
+            return True
+        return bool(profile and WhatsAppHandler._profile_has_signal(profile))
+
+    def _should_attempt_llm_profile_extraction(self, text: str, profile: Dict[str, Any]) -> bool:
+        if not get_deepseek_api_key():
+            return False
+        if self._is_off_topic_request(text) or self._is_out_of_scope_request(text):
+            return False
+        if not self._looks_like_onboarding_reply(text, profile):
+            return False
+        return True
+
+    def _llm_extract_profile_update(
+        self,
+        from_number: str,
+        text: str,
+        profile: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        if not self._should_attempt_llm_profile_extraction(text, profile):
+            return {}
+        if not self._consume_llm_quota(from_number):
+            return {}
+
+        options = self.admin_profile_options()
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "你是澳門家長學堂 WhatsApp bot 的語意抽取器，只能輸出 JSON。"
+                    "你的任務不是聊天，而是把家長自然語句轉成可用 profile。"
+                    "只抽取與孩子年齡、家長痛點、課程主題、對象有關的資訊。"
+                    "如果是餐廳、天氣、投資、功課、翻譯、寫程式等無關問題，"
+                    "回傳 is_course_related=false。"
+                    "可接受粵語、國語、英文混合，例如 '8 and 6' 代表孩子 8 歲和 6 歲。"
+                    "age_groups 只能用：0-2歲, 3-6歲, 7-12歲, 13-18歲。"
+                    "pain_points、topic、target 只能使用用戶提供選項。"
+                    "不要創造其他值。不要輸出 markdown。"
+                ),
+            },
+            {
+                "role": "user",
+                "content": json.dumps(
+                    {
+                        "家長訊息": text,
+                        "目前已知profile": profile,
+                        "可選age_groups": options["age_groups"],
+                        "可選pain_points": options["pain_points"],
+                        "可選topics": options["topics"],
+                        "可選targets": options["targets"],
+                        "輸出JSON格式": {
+                            "is_course_related": True,
+                            "age_groups": [],
+                            "pain_points": [],
+                            "topic": "",
+                            "target": "",
+                            "pain_summary": "",
+                            "confidence": 0.0,
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+            },
+        ]
+        raw = self._call_deepseek(messages, max_tokens=320)
+        payload = self._extract_json_object(raw or "")
+        if not payload or payload.get("is_course_related") is False:
+            return {}
+
+        valid_age_groups = set(options["age_groups"])
+        valid_pain_points = set(options["pain_points"])
+        valid_topics = set(options["topics"])
+        valid_targets = set(options["targets"])
+        extracted: Dict[str, Any] = {}
+        age_groups = [
+            str(age).strip()
+            for age in payload.get("age_groups", [])
+            if str(age).strip() in valid_age_groups
+        ]
+        pain_points = [
+            str(pain).strip()
+            for pain in payload.get("pain_points", [])
+            if str(pain).strip() in valid_pain_points
+        ]
+        topic = str(payload.get("topic", "") or "").strip()
+        target = str(payload.get("target", "") or "").strip()
+        pain_summary = str(payload.get("pain_summary", "") or "").strip()
+
+        if age_groups:
+            extracted["age_groups"] = age_groups[:4]
+            extracted["age_group"] = age_groups[0]
+        if pain_points:
+            extracted["pain_points"] = pain_points[:8]
+        if topic in valid_topics:
+            extracted["topic"] = topic
+            extracted["topic_source"] = "llm"
+        if target in valid_targets:
+            extracted["target"] = target
+        if pain_summary:
+            extracted["pain_summary"] = pain_summary[:180]
+        return extracted
+
+    def _update_profile_from_llm_text(
+        self,
+        from_number: str,
+        text: str,
+        profile: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        extracted = self._llm_extract_profile_update(from_number, text, profile)
+        if not extracted:
+            return profile
+
+        updated = dict(profile)
+        if extracted.get("age_groups"):
+            updated["age_groups"] = extracted["age_groups"]
+            updated["age_group"] = extracted["age_groups"][0]
+        if extracted.get("target"):
+            updated["target"] = extracted["target"]
+        if extracted.get("topic"):
+            updated["topic"] = extracted["topic"]
+            updated["topic_source"] = extracted.get("topic_source", "llm")
+        if extracted.get("pain_points"):
+            existing = [str(p) for p in updated.get("pain_points", []) if p]
+            for pain in extracted["pain_points"]:
+                if pain not in existing:
+                    existing.append(pain)
+            updated["pain_points"] = existing[:8]
+            self._memory.add_conversation_tags(from_number, extracted["pain_points"])
+        if extracted.get("pain_summary"):
+            updated["pain_summary"] = extracted["pain_summary"]
+
+        self._save_profile(from_number, updated)
+        self._sync_onboarding_conversation_meta(from_number, updated)
+        return updated
+
     def _get_llm_recommendation_text(
         self,
         from_number: str,
@@ -2223,21 +2412,7 @@ class WhatsAppHandler:
                     self._memory.save_llm_cached_response(cache_key, repaired_reply)
                 return repaired_reply
 
-            daily_limit = get_deepseek_daily_limit_per_user()
-            global_limit = get_deepseek_daily_limit_global()
-            if not self._memory.try_consume_llm_quotas(
-                from_number,
-                per_user_daily_limit=daily_limit,
-                global_daily_limit=global_limit,
-            ):
-                logger.info(
-                    "DeepSeek 每日限額已達 from=%s usage=%s limit=%s global_usage=%s global_limit=%s",
-                    from_number,
-                    self._memory.get_llm_usage_count(from_number),
-                    daily_limit,
-                    self._memory.get_llm_usage_count("__global__"),
-                    global_limit,
-                )
+            if not self._consume_llm_quota(from_number):
                 return None
 
             messages = [
@@ -2472,13 +2647,18 @@ class WhatsAppHandler:
                 "有什麼可以幫你的嗎？"
             )
         else:
-            self._memory.add_agent_flag(
-                from_number,
-                "uncertain",
-                "AI 未能理解家長訊息，需要人工檢視或補充提示",
-                {"message": text.strip()[:300]},
-            )
-            reply = self._unknown_text()
+            llm_profile = self._update_profile_from_llm_text(from_number, text, profile)
+            if llm_profile != profile:
+                profile = llm_profile
+                reply = self._get_agentic_recommendation_text(from_number, profile, text)
+            else:
+                self._memory.add_agent_flag(
+                    from_number,
+                    "uncertain",
+                    "AI 未能理解家長訊息，需要人工檢視或補充提示",
+                    {"message": text.strip()[:300]},
+                )
+                reply = self._unknown_text()
 
         self._reply(from_number, reply)
 
