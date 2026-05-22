@@ -21,6 +21,7 @@ import requests
 
 from bot_webhook import ZeaburBot
 from scraper import AGE_GROUP_LABELS, TOPICS, TARGETS, normalize_course_detail_url
+import whatsapp_nlu
 from whatsapp_memory import WhatsAppMemoryStore
 
 logger = logging.getLogger("whatsapp_handler")
@@ -330,44 +331,11 @@ def detect_age_group(text: str) -> Optional[str]:
 
 def parse_chinese_number(value: str) -> Optional[int]:
     """Parse small Chinese numerals used for child ages, e.g. 八, 十三, 十八."""
-    text = str(value or "").strip()
-    if not text:
-        return None
-    if all(ch in CHINESE_NUMERAL_VALUES for ch in text):
-        number = 0
-        for ch in text:
-            number = number * 10 + CHINESE_NUMERAL_VALUES[ch]
-        return number
-    if text == "十":
-        return 10
-    if "十" not in text:
-        return None
-    left, right = text.split("十", 1)
-    if left == "":
-        tens = 1
-    elif left in CHINESE_NUMERAL_VALUES:
-        tens = CHINESE_NUMERAL_VALUES[left]
-    else:
-        return None
-    if right == "":
-        ones = 0
-    elif right in CHINESE_NUMERAL_VALUES:
-        ones = CHINESE_NUMERAL_VALUES[right]
-    else:
-        return None
-    return tens * 10 + ones
+    return whatsapp_nlu.parse_chinese_number(value)
 
 
 def age_to_group(age: float) -> str:
-    if 0 <= age < 3:
-        return "0-2歲"
-    if 3 <= age < 7:
-        return "3-6歲"
-    if 7 <= age < 13:
-        return "7-12歲"
-    if 13 <= age <= 18:
-        return "13-18歲"
-    return ""
+    return whatsapp_nlu.age_to_group(age)
 
 
 def detect_child_age_group(text: str) -> Optional[str]:
@@ -430,15 +398,7 @@ def detect_topic(text: str) -> str:
 
 def detect_pain_points(text: str) -> List[Dict[str, str]]:
     """Detect parent pain points and map them to course topics."""
-    text_lower = text.strip().lower()
-    matches: List[Dict[str, str]] = []
-    for rule in PAIN_POINT_RULES:
-        if any(_contains_pain_keyword(text_lower, str(keyword)) for keyword in rule["keywords"]):
-            matches.append({
-                "tag": str(rule["tag"]),
-                "topic": str(rule["topic"]),
-            })
-    return matches
+    return whatsapp_nlu.detect_pain_points(text)
 
 
 def _contains_pain_keyword(text_lower: str, keyword: str) -> bool:
