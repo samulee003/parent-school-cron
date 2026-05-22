@@ -344,7 +344,8 @@ def _build_agent_state(
     open_flags_count = store.count_agent_flags(phone=phone, unresolved_only=True)
     draft_count = store.count_proactive_drafts(phone=phone, status="draft")
     qa_feedback_count = store.count_qa_feedback(status="open", phone=phone)
-    consent_status = (conversation or store.get_conversation(phone)).get("consent_status", "unknown")
+    conversation = conversation or store.get_conversation(phone)
+    consent_status = conversation.get("consent_status", "unknown")
 
     if qa_feedback_count:
         recommended_action = "檢視 QA 回饋"
@@ -366,6 +367,12 @@ def _build_agent_state(
         "open_flags_count": open_flags_count,
         "draft_count": draft_count,
         "qa_feedback_count": qa_feedback_count,
+        "last_harness_route": conversation.get("last_harness_route", ""),
+        "last_harness_intent": conversation.get("last_harness_intent", ""),
+        "last_harness_action": conversation.get("last_harness_action", ""),
+        "last_harness_allow_llm": bool(conversation.get("last_harness_allow_llm", 0)),
+        "last_harness_llm_purpose": conversation.get("last_harness_llm_purpose", ""),
+        "last_harness_at": conversation.get("last_harness_at", ""),
     }
 
 
@@ -1207,6 +1214,7 @@ async def admin_dashboard(request: Request):
           </div>
         </div>
         <div class="kv"><div class="label">Agent State</div><div id="agentState" class="state">未選擇</div></div>
+        <div class="kv"><div class="label">Harness Trace</div><div id="harnessRoute" class="state">Harness: -</div></div>
         <div style="display:flex; gap:8px; flex-wrap:wrap">
           <button class="warn" onclick="takeover()">人工接手</button>
           <button onclick="resumeAi()">恢復 AI</button>
@@ -1398,6 +1406,14 @@ async def admin_dashboard(request: Request):
     }
     function renderAgentState(state) {
       const readyClass = state.profile_ready ? "ready" : "missing";
+      const route = state.last_harness_route || "-";
+      const action = state.last_harness_action || "-";
+      const intent = state.last_harness_intent ? ` · intent: ${esc(state.last_harness_intent)}` : "";
+      const purpose = state.last_harness_llm_purpose ? ` · ${esc(state.last_harness_llm_purpose)}` : "";
+      document.getElementById("harnessRoute").innerHTML = `
+        <div>Harness: ${esc(route)} / ${esc(action)}</div>
+        <div>LLM: ${state.last_harness_allow_llm ? "yes" : "no"}${intent}${purpose}</div>
+      `;
       document.getElementById("agentState").innerHTML = `
         <div>狀態：<span class="${readyClass}">${state.profile_ready ? "資料足夠" : "需要補資料"}</span></div>
         <div>下一步：${esc(state.recommended_action || "-")}</div>

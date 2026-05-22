@@ -204,6 +204,42 @@ class WhatsAppMemoryStore:
                 )
                 self._ensure_column(
                     conn,
+                    "whatsapp_conversations",
+                    "last_harness_route",
+                    "TEXT NOT NULL DEFAULT ''",
+                )
+                self._ensure_column(
+                    conn,
+                    "whatsapp_conversations",
+                    "last_harness_intent",
+                    "TEXT NOT NULL DEFAULT ''",
+                )
+                self._ensure_column(
+                    conn,
+                    "whatsapp_conversations",
+                    "last_harness_action",
+                    "TEXT NOT NULL DEFAULT ''",
+                )
+                self._ensure_column(
+                    conn,
+                    "whatsapp_conversations",
+                    "last_harness_allow_llm",
+                    "INTEGER NOT NULL DEFAULT 0",
+                )
+                self._ensure_column(
+                    conn,
+                    "whatsapp_conversations",
+                    "last_harness_llm_purpose",
+                    "TEXT NOT NULL DEFAULT ''",
+                )
+                self._ensure_column(
+                    conn,
+                    "whatsapp_conversations",
+                    "last_harness_at",
+                    "TEXT NOT NULL DEFAULT ''",
+                )
+                self._ensure_column(
+                    conn,
                     "whatsapp_proactive_drafts",
                     "original_text",
                     "TEXT NOT NULL DEFAULT ''",
@@ -334,6 +370,12 @@ class WhatsAppMemoryStore:
                         c.tags_json,
                         c.notes,
                         c.proactive_notes,
+                        c.last_harness_route,
+                        c.last_harness_intent,
+                        c.last_harness_action,
+                        c.last_harness_allow_llm,
+                        c.last_harness_llm_purpose,
+                        c.last_harness_at,
                         c.last_message_at,
                         c.created_at,
                         c.updated_at,
@@ -408,6 +450,9 @@ class WhatsAppMemoryStore:
                     """
                     SELECT phone, display_name, status, tags_json, notes,
                            consent_status, proactive_notes, last_message_at,
+                           last_harness_route, last_harness_intent,
+                           last_harness_action, last_harness_allow_llm,
+                           last_harness_llm_purpose, last_harness_at,
                            created_at, updated_at
                     FROM whatsapp_conversations
                     WHERE phone = ?
@@ -415,6 +460,48 @@ class WhatsAppMemoryStore:
                     (phone,),
                 ).fetchone()
         return self._conversation_row_to_dict(row) if row else {}
+
+    def record_harness_trace(
+        self,
+        phone: str,
+        *,
+        route: str,
+        intent: str = "",
+        recommended_action: str = "",
+        allow_llm: bool = False,
+        llm_purpose: str = "",
+    ) -> None:
+        if not phone:
+            return
+
+        now = datetime.now().isoformat()
+        with self._lock:
+            with closing(sqlite3.connect(str(self.db_path))) as conn:
+                self._upsert_conversation(conn, phone, now)
+                conn.execute(
+                    """
+                    UPDATE whatsapp_conversations
+                    SET last_harness_route = ?,
+                        last_harness_intent = ?,
+                        last_harness_action = ?,
+                        last_harness_allow_llm = ?,
+                        last_harness_llm_purpose = ?,
+                        last_harness_at = ?,
+                        updated_at = ?
+                    WHERE phone = ?
+                    """,
+                    (
+                        str(route or ""),
+                        str(intent or ""),
+                        str(recommended_action or ""),
+                        1 if allow_llm else 0,
+                        str(llm_purpose or ""),
+                        now,
+                        now,
+                        phone,
+                    ),
+                )
+                conn.commit()
 
     def update_conversation(
         self,

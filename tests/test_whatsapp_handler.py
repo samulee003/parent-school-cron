@@ -730,6 +730,17 @@ class WhatsAppHandlerTests(unittest.TestCase):
         self.assertIn("只協助查詢和推薦", sent[1][1])
         self.assertIn("澳門家長學堂課程", sent[1][1])
 
+    def test_off_topic_recommendation_persists_harness_trace(self):
+        handler, _ = self.make_handler()
+
+        handler._handle_text_message("85360000000", "推薦餐廳")
+
+        conversation = handler._memory.get_conversation("85360000000")
+        self.assertEqual(conversation["last_harness_route"], "off_topic")
+        self.assertEqual(conversation["last_harness_action"], "local_refusal")
+        self.assertEqual(conversation["last_harness_allow_llm"], 0)
+        self.assertTrue(conversation["last_harness_at"])
+
     def test_off_topic_message_with_child_age_does_not_call_deepseek_or_update_profile(self):
         handler, sent = self.make_handler()
 
@@ -1549,6 +1560,12 @@ class WhatsAppHandlerTests(unittest.TestCase):
             ))
             self.assertTrue(detail["agent_state"]["profile_ready"])
             self.assertEqual(detail["agent_state"]["recommended_action"], "可推薦課程")
+            self.assertIn("last_harness_route", detail["agent_state"])
+            self.assertIn("last_harness_intent", detail["agent_state"])
+            self.assertIn("last_harness_action", detail["agent_state"])
+            self.assertIn("last_harness_allow_llm", detail["agent_state"])
+            self.assertIn("last_harness_llm_purpose", detail["agent_state"])
+            self.assertIn("last_harness_at", detail["agent_state"])
         finally:
             api_server.wa_handler = old_handler
             api_server.wa_memory = old_memory
@@ -1910,6 +1927,8 @@ class WhatsAppHandlerTests(unittest.TestCase):
             self.assertIn("submitQaFeedback", html)
             self.assertIn("loadQaFeedback", html)
             self.assertIn("人工接手", html)
+            self.assertIn("harnessRoute", html)
+            self.assertIn("Harness Trace", html)
             self.assertIn("不確定隊列", html)
             self.assertIn("主動匹配草稿", html)
         finally:

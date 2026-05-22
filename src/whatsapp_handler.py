@@ -22,6 +22,7 @@ import requests
 from bot_webhook import ZeaburBot
 from scraper import AGE_GROUP_LABELS, TOPICS, TARGETS, normalize_course_detail_url
 import whatsapp_nlu
+from whatsapp_harness import decide_message_route
 from whatsapp_memory import WhatsAppMemoryStore
 
 logger = logging.getLogger("whatsapp_handler")
@@ -2401,6 +2402,17 @@ class WhatsAppHandler:
         if self._memory.is_human_takeover(from_number):
             logger.info("AI 已暫停，自動略過 from=%s", from_number)
             return
+
+        current_profile = self._load_profile(from_number)
+        harness_decision = decide_message_route(text, current_profile)
+        self._memory.record_harness_trace(
+            from_number,
+            route=harness_decision.get("route", ""),
+            intent=harness_decision.get("intent", ""),
+            recommended_action=harness_decision.get("recommended_action", ""),
+            allow_llm=bool(harness_decision.get("allow_llm")),
+            llm_purpose=harness_decision.get("llm_purpose", ""),
+        )
 
         # 關鍵詞匹配
         if normalized in RESET_KEYWORDS:
