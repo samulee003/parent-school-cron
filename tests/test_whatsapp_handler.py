@@ -19,7 +19,7 @@ from fastapi import HTTPException
 
 import api_server
 from scraper import Course
-from whatsapp_handler import WhatsAppHandler, is_valid_meta_signature
+from whatsapp_handler import WhatsAppHandler, detect_age_groups, is_valid_meta_signature
 from whatsapp_memory import WhatsAppMemoryStore
 
 
@@ -191,6 +191,26 @@ class WhatsAppHandlerTests(unittest.TestCase):
         self.assertIn("青少年", conversation["tags"])
         self.assertIn("情緒壓力", conversation["tags"])
         self.assertIn("onboarding:", conversation["notes"])
+
+    def test_chinese_numeral_age_onboarding_answer_is_understood(self):
+        handler = WhatsAppHandler()
+        handler._get_bot = lambda: type("Bot", (), {"scraper": FakeCrawler()})()
+        sent = []
+        handler._send_text = lambda to, text: sent.append((to, text)) or True
+
+        handler._handle_text_message("85360000000", "幫我揀")
+        handler._handle_text_message("85360000000", "八歲，情緒")
+
+        profile = handler._memory.get_profile("85360000000")
+        self.assertEqual(profile["age_groups"], ["7-12歲"])
+        self.assertIn("情緒壓力", profile["pain_points"])
+        self.assertNotIn("小朋友幾多歲", sent[1][1])
+
+    def test_chinese_numeral_age_detection_supports_common_forms(self):
+        self.assertEqual(WhatsAppHandler._normalize_command("八歲"), "八歲")
+        self.assertEqual(detect_age_groups("八歲，情緒"), ["7-12歲"])
+        self.assertEqual(detect_age_groups("十三歲，情緒"), ["13-18歲"])
+        self.assertEqual(detect_age_groups("兩歲和十歲"), ["0-2歲", "7-12歲"])
 
     def test_onboarding_age_only_asks_for_concern_without_calling_deepseek(self):
         handler, sent = self.make_handler()

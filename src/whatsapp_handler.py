@@ -39,6 +39,21 @@ AGE_KEYWORDS = {
     "7-12歲": ("7-12", "7至12", "7到12", "小學", "小學生", "兒童"),
     "13-18歲": ("13-18", "13至18", "13到18", "中學", "中學生", "青少年"),
 }
+CHINESE_NUMERAL_VALUES = {
+    "零": 0,
+    "〇": 0,
+    "一": 1,
+    "二": 2,
+    "兩": 2,
+    "两": 2,
+    "三": 3,
+    "四": 4,
+    "五": 5,
+    "六": 6,
+    "七": 7,
+    "八": 8,
+    "九": 9,
+}
 
 PAGE_SIZE = 3
 NEXT_PAGE_KEYWORDS = {
@@ -312,13 +327,37 @@ def detect_age_group(text: str) -> Optional[str]:
     return None
 
 
-def detect_child_age_group(text: str) -> Optional[str]:
-    """從自然語句推測孩子年齡層，例如「小朋友1歲半」「孩子7歲」。"""
-    text_lower = text.strip().lower().replace("岁", "歲")
-    match = re.search(r"(\d+(?:\.\d+)?)\s*歲", text_lower)
-    if not match:
+def parse_chinese_number(value: str) -> Optional[int]:
+    """Parse small Chinese numerals used for child ages, e.g. 八, 十三, 十八."""
+    text = str(value or "").strip()
+    if not text:
         return None
-    age = float(match.group(1))
+    if all(ch in CHINESE_NUMERAL_VALUES for ch in text):
+        number = 0
+        for ch in text:
+            number = number * 10 + CHINESE_NUMERAL_VALUES[ch]
+        return number
+    if text == "十":
+        return 10
+    if "十" not in text:
+        return None
+    left, right = text.split("十", 1)
+    if left == "":
+        tens = 1
+    elif left in CHINESE_NUMERAL_VALUES:
+        tens = CHINESE_NUMERAL_VALUES[left]
+    else:
+        return None
+    if right == "":
+        ones = 0
+    elif right in CHINESE_NUMERAL_VALUES:
+        ones = CHINESE_NUMERAL_VALUES[right]
+    else:
+        return None
+    return tens * 10 + ones
+
+
+def age_to_group(age: float) -> str:
     if 0 <= age < 3:
         return "0-2歲"
     if 3 <= age < 7:
@@ -327,7 +366,13 @@ def detect_child_age_group(text: str) -> Optional[str]:
         return "7-12歲"
     if 13 <= age <= 18:
         return "13-18歲"
-    return None
+    return ""
+
+
+def detect_child_age_group(text: str) -> Optional[str]:
+    """從自然語句推測孩子年齡層，例如「小朋友1歲半」「孩子7歲」。"""
+    groups = detect_child_age_groups(text)
+    return groups[0] if groups else None
 
 
 def detect_child_age_groups(text: str) -> List[str]:
@@ -335,16 +380,15 @@ def detect_child_age_groups(text: str) -> List[str]:
     text_lower = text.strip().lower().replace("岁", "歲")
     groups: List[str] = []
     for match in re.finditer(r"(\d+(?:\.\d+)?)\s*歲", text_lower):
-        age = float(match.group(1))
-        group = ""
-        if 0 <= age < 3:
-            group = "0-2歲"
-        elif 3 <= age < 7:
-            group = "3-6歲"
-        elif 7 <= age < 13:
-            group = "7-12歲"
-        elif 13 <= age <= 18:
-            group = "13-18歲"
+        group = age_to_group(float(match.group(1)))
+        if group and group not in groups:
+            groups.append(group)
+
+    for match in re.finditer(r"([零〇一二兩两三四五六七八九十]{1,3})\s*歲", text_lower):
+        age = parse_chinese_number(match.group(1))
+        if age is None:
+            continue
+        group = age_to_group(float(age))
         if group and group not in groups:
             groups.append(group)
     return groups
