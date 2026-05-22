@@ -696,7 +696,7 @@ def _public_landing_html() -> str:
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>家長學堂 WhatsApp 課程小助手</title>
-  <meta name="description" content="透過 WhatsApp 查詢澳門家長學堂課程，按孩子年齡和課程類型篩選並取得官方報名連結。">
+  <meta name="description" content="透過 WhatsApp 查詢澳門家長學堂課程，按孩子年齡和關心方向取得少量官方課程連結。">
   <meta property="og:title" content="家長學堂 WhatsApp 課程小助手">
   <meta property="og:description" content="打開 WhatsApp，輸入「課程」即可查詢澳門家長學堂課程。">
   <meta property="og:image" content="https://parent-school-bot.zeabur.app/whatsapp-qr.png">
@@ -717,7 +717,7 @@ def _public_landing_html() -> str:
 <body>
   <main>
     <h1>家長學堂 WhatsApp 課程小助手</h1>
-    <p>這是一個協助家長查詢澳門家長學堂課程的 WhatsApp 小助手。家長可以按孩子年齡、親子課、家長講座、青少年課程等條件查詢，並取得官方報名連結。</p>
+    <p>這是一個協助家長查詢澳門家長學堂課程的 WhatsApp 測試版小助手。你可以用一句自然語句描述孩子年齡和最近關心的方向，我會盡量只挑少量相關課程，並附官方報名連結。</p>
     <p>課程資料來自澳門教育及青年發展局家長學堂公開課程頁面，實際名額、時間和報名狀態以官方網站為準。</p>
     <div class="panel">
       <p>WhatsApp 使用方式：</p>
@@ -735,7 +735,8 @@ def _public_landing_html() -> str:
     </div>
     <div class="panel">
       <p>私隱說明</p>
-      <p class="small">本服務只會使用家長在 WhatsApp 對話中提供的查詢內容，以便記住年齡偏好和回覆課程建議。不會出售個人資料，也不提供與家長學堂課程無關的通用 AI 問答。</p>
+      <p class="small">本服務只會使用你在 WhatsApp 對話中提供的孩子大概年齡、關心方向和課程查詢內容，以便記住偏好和回覆課程建議。請不要輸入小朋友姓名、學校、證件、住址或其他敏感資料。</p>
+      <p class="small">不會出售個人資料，也不提供與家長學堂課程無關的通用 AI 問答。你可以在 WhatsApp 回覆「私隱」查看說明，回覆「暫停推送」停止主動課程提醒，或回覆「刪除資料」清除保存的對話記錄和偏好。</p>
     </div>
   </main>
   <script>

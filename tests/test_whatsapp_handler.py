@@ -1036,6 +1036,69 @@ class WhatsAppHandlerTests(unittest.TestCase):
         self.assertEqual(conversation["consent_status"], "paused")
         self.assertIn("暫停", sent[0][1])
 
+    def test_parent_can_unsubscribe_with_stop_even_during_human_takeover(self):
+        handler, sent = self.make_handler()
+        handler._memory.update_conversation("85360000000", consent_status="allowed")
+        handler._memory.set_conversation_status("85360000000", "human")
+
+        handler._handle_text_message("85360000000", "stop")
+
+        conversation = handler._memory.get_conversation("85360000000")
+        self.assertEqual(conversation["status"], "human")
+        self.assertEqual(conversation["consent_status"], "paused")
+        self.assertIn("暫停", sent[0][1])
+
+    def test_parent_can_request_privacy_text_without_deepseek(self):
+        handler, sent = self.make_handler()
+        handler._memory.set_conversation_status("85360000000", "human")
+
+        with patch.dict(os.environ, {"DEEPSEEK_API_KEY": "test-key"}, clear=False):
+            with patch("whatsapp_handler.requests.post") as post:
+                handler._handle_text_message("85360000000", "私隱")
+
+        self.assertFalse(post.called)
+        self.assertIn("私隱與資料使用說明", sent[0][1])
+        self.assertIn("暫停推送", sent[0][1])
+        self.assertIn("刪除資料", sent[0][1])
+
+    def test_parent_can_delete_all_stored_data_from_whatsapp(self):
+        handler, sent = self.make_handler()
+        phone = "85360000000"
+        store = handler._memory
+        store.save_profile(phone, {"age_groups": ["7-12歲"], "pain_points": ["情緒壓力"]})
+        store.save_last_query(phone, {"age_group": "7-12歲", "page": 2})
+        store.record_message(phone, "inbound", "parent", "小朋友8歲，情緒")
+        store.update_conversation(phone, tags=["7-12歲"], notes="人工備註", consent_status="allowed")
+        store.claim_message("wamid.delete-me", phone)
+        store.try_consume_llm_quota(phone, 10)
+        store.save_llm_cached_response("cache-key", "cached reply")
+        store.add_agent_flag(phone, "uncertain", "不確定")
+        store.save_proactive_draft(phone, "推送草稿")
+        store.add_qa_feedback(phone, summary="bad reply")
+
+        handler._handle_text_message(phone, "刪除資料")
+
+        self.assertIn("已清除", sent[-1][1])
+        self.assertEqual(store.get_profile(phone), {})
+        self.assertEqual(store.get_last_query(phone), {})
+        self.assertEqual(store.get_messages(phone), [])
+        self.assertEqual(store.list_agent_flags(phone=phone, unresolved_only=False), [])
+        self.assertEqual(store.count_proactive_drafts(phone=phone, status="all"), 0)
+        self.assertEqual(store.count_qa_feedback(phone=phone, status="all"), 0)
+        self.assertEqual(store.get_llm_usage_count(phone), 0)
+        self.assertEqual(store.get_llm_cached_response("cache-key"), "")
+        with sqlite3.connect(str(store.db_path)) as conn:
+            conversation_count = conn.execute(
+                "SELECT COUNT(*) FROM whatsapp_conversations WHERE phone = ?",
+                (phone,),
+            ).fetchone()[0]
+            processed_count = conn.execute(
+                "SELECT COUNT(*) FROM processed_whatsapp_messages WHERE phone = ?",
+                (phone,),
+            ).fetchone()[0]
+        self.assertEqual(conversation_count, 0)
+        self.assertEqual(processed_count, 0)
+
     def test_parent_denial_does_not_enable_proactive_push_from_whatsapp(self):
         handler, sent = self.make_handler()
 
@@ -2798,10 +2861,14 @@ class WhatsAppHandlerTests(unittest.TestCase):
         result = asyncio.run(api_server.root())
 
         self.assertIn("家長學堂 WhatsApp 課程小助手", result)
+        self.assertIn("測試版", result)
         self.assertIn("https://wa.me/8614714949607", result)
         self.assertIn("whatsapp://send?phone=8614714949607", result)
         self.assertIn("parent-school-bot.zeabur.app/whatsapp", result)
         self.assertIn("MicroMessenger", result)
+        self.assertIn("不要輸入小朋友姓名", result)
+        self.assertIn("暫停推送", result)
+        self.assertIn("刪除資料", result)
 
     def test_whatsapp_share_page_handles_wechat_handoff(self):
         result = asyncio.run(api_server.whatsapp_share_page())

@@ -315,6 +315,38 @@ class WhatsAppMemoryStore:
                 )
                 conn.commit()
 
+    def delete_user_data(self, phone: str) -> Dict[str, int]:
+        """Delete parent-owned WhatsApp records for a self-service privacy request."""
+        if not phone:
+            return {}
+
+        targets = {
+            "memory": ("whatsapp_memory", "phone = ?", [phone]),
+            "conversation": ("whatsapp_conversations", "phone = ?", [phone]),
+            "messages": ("whatsapp_messages", "phone = ?", [phone]),
+            "processed_message_ids": ("processed_whatsapp_messages", "phone = ?", [phone]),
+            "llm_usage": ("llm_daily_usage", "phone = ?", [phone]),
+            "flags": ("whatsapp_agent_flags", "phone = ?", [phone]),
+            "proactive_drafts": ("whatsapp_proactive_drafts", "phone = ?", [phone]),
+            "qa_feedback": ("whatsapp_qa_feedback", "phone = ?", [phone]),
+            # The cache key is intentionally phone-free, so a targeted erasure cannot
+            # prove which cached reply came from this parent. Clear it conservatively.
+            "llm_cache": ("llm_response_cache", "1 = 1", []),
+        }
+        counts: Dict[str, int] = {}
+        with self._lock:
+            with closing(sqlite3.connect(str(self.db_path))) as conn:
+                for label, (table, where, values) in targets.items():
+                    row = conn.execute(
+                        f"SELECT COUNT(*) FROM {table} WHERE {where}",
+                        values,
+                    ).fetchone()
+                    counts[label] = int(row[0]) if row else 0
+                for table, where, values in targets.values():
+                    conn.execute(f"DELETE FROM {table} WHERE {where}", values)
+                conn.commit()
+        return counts
+
     def record_message(
         self,
         phone: str,

@@ -1,6 +1,6 @@
 # Agent Guide
 
-本文件是給 Codex / Claude / 其他 agent 接手本專案時先讀的工作規則。請先讀本文件，再讀 `memory.md`、`README.md`、`SPEC.md`。
+本文件是給 Codex / Claude / 其他 agent 接手本專案時先讀的工作規則。請先讀本文件，再讀 `agents.md`、`memory.md`、`README.md`、`SPEC.md`。
 
 ## Product Direction
 
@@ -25,6 +25,7 @@
 - 不要讓 DeepSeek 回答餐廳、天氣、投資、功課、翻譯、寫 code 等無關問題。
 - 不要為了看起來「更 AI」而創造不存在的課程、日期、名額或連結。
 - 課程資料以 DSEDJ 家長學堂公開頁面為來源，實際報名狀態以官方網站為準。
+- 家長回覆 `私隱`、`暫停推送`、`退訂`、`stop`、`刪除資料` 這類資料控制指令時，必須本地處理，不應交給 LLM。
 
 ## Main Files
 
@@ -194,6 +195,9 @@ Default WhatsApp behavior:
 - If the user says `更多`, `下一頁`, or `還有嗎`, continue the last persisted query.
 - If the user asks for all courses, paginate compactly.
 - Always include official detail links in course replies.
+- If the user says `私隱`, explain data use, sensitive-data boundaries, pause, and delete controls.
+- If the user says `暫停推送`, `退訂`, or `stop`, set proactive consent to `paused` even during human takeover.
+- If the user says `刪除資料`, erase the parent-owned WhatsApp data from the local memory store and send a short confirmation without recording a new transcript entry.
 - WhatsApp voice notes should be transcribed before recommendation. Prefer
   StepFun ASR when `STEPFUN_API_KEY` is configured; OpenAI transcription is a
   fallback when available. If transcription fails, record the audio placeholder,
@@ -264,6 +268,7 @@ Already started:
 - Parent consent status for proactive pushes: `unknown`, `allowed`, `paused`.
 - Operator-approved proactive draft sending for parents with `allowed` consent.
 - Privacy pruning endpoint for old operational history: preview or delete old transcripts, LLM cache, processed message IDs, resolved flags, and closed proactive draft history while preserving parent profiles and open drafts.
+- WhatsApp-side self-service privacy controls: `私隱` shows the data-use notice; `暫停推送` / `退訂` / `stop` pause proactive reminders; `刪除資料` clears the parent profile, transcript, flags, drafts, QA feedback, LLM usage, and LLM cache conservatively.
 - WhatsApp-side consent capture: parents can reply `同意推送` / `同意收課程提醒`
   or `暫停推送`.
 - WhatsApp template send path for proactive drafts outside the 24-hour window.
@@ -291,6 +296,7 @@ Tests should cover:
 - Human takeover suppresses AI auto-reply.
 - Manual admin reply records outbound messages.
 - Long non-course messages do not call DeepSeek or update parent profile.
+- Privacy, unsubscribe, and delete-data commands work without DeepSeek and still work during human takeover.
 
 ## Working Style
 

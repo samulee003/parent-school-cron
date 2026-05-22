@@ -42,6 +42,15 @@ NEXT_PAGE_KEYWORDS = whatsapp_nlu.NEXT_PAGE_KEYWORDS
 ALL_COURSE_KEYWORDS = whatsapp_nlu.ALL_COURSE_KEYWORDS
 RESET_KEYWORDS = {"重設", "重新設定", "reset"}
 PROFILE_KEYWORDS = {"我的偏好", "偏好", "設定", "狀態", "profile"}
+PRIVACY_KEYWORDS = {
+    "私隱", "私隱說明", "私隱政策", "隱私", "隱私政策", "privacy",
+    "個人資料", "資料說明",
+}
+DELETE_DATA_KEYWORDS = {
+    "刪除資料", "删除资料", "清除資料", "清除资料", "刪除我的資料",
+    "删除我的资料", "刪除記錄", "删除记录", "刪除帳號", "删除账号",
+    "delete", "delete my data", "forget me",
+}
 PROACTIVE_ALLOW_KEYWORDS = {
     "同意收課程提醒", "同意收提醒", "同意推送", "可以推送",
     "可以提醒", "開啟推送", "恢復推送", "接收推送", "收課程提醒",
@@ -53,6 +62,7 @@ PROACTIVE_DENY_KEYWORDS = {
 PROACTIVE_PAUSE_KEYWORDS = {
     "暫停推送", "暂停推送", "停止推送", "取消推送", "不要推送",
     "不用推送", "不想收到", "唔好推送", "停止提醒", "暫停提醒", "暂停提醒",
+    "退訂", "退订", "取消訂閱", "取消订阅", "unsubscribe", "stop",
 }
 NEGATION_WORDS = ("不要", "不用", "不想", "不是", "唔要", "唔係", "排除", "非")
 BARE_RECOMMENDATION_COMMANDS = {
@@ -1074,6 +1084,36 @@ class WhatsAppHandler:
         return (
             "已記住：暫停主動課程提醒。\n\n"
             "我仍然可以即時幫你查課程；之後想恢復，可以回覆 *同意推送*。"
+        )
+
+    @staticmethod
+    def _is_privacy_request(text: str) -> bool:
+        normalized = WhatsAppHandler._normalize_command(text)
+        return normalized in {WhatsAppHandler._normalize_command(k) for k in PRIVACY_KEYWORDS}
+
+    @staticmethod
+    def _is_delete_data_request(text: str) -> bool:
+        normalized = WhatsAppHandler._normalize_command(text)
+        return normalized in {WhatsAppHandler._normalize_command(k) for k in DELETE_DATA_KEYWORDS}
+
+    @staticmethod
+    def _privacy_text() -> str:
+        return (
+            "*私隱與資料使用說明*\n\n"
+            "我只使用你在 WhatsApp 提供的孩子大概年齡、關心方向和課程查詢內容，"
+            "用來推薦澳門家長學堂課程和記住偏好。\n\n"
+            "請不要傳小朋友姓名、學校、證件、住址或其他敏感資料。"
+            "課程資料以官方網站為準。\n\n"
+            "你可以隨時回覆：\n"
+            "• *暫停推送*：停止主動課程提醒\n"
+            "• *刪除資料*：清除我這邊保存的對話記錄和偏好"
+        )
+
+    @staticmethod
+    def _delete_data_confirmation_text() -> str:
+        return (
+            "已清除我這邊保存的對話記錄、偏好、標籤、草稿和測試回饋。\n\n"
+            "之後如果想重新使用，直接再傳 *課程* 就可以。"
         )
 
     @staticmethod
@@ -2458,22 +2498,18 @@ class WhatsAppHandler:
         if record_inbound:
             self._memory.record_message(from_number, "inbound", "parent", text)
 
-        if self._memory.is_human_takeover(from_number):
-            logger.info("AI 已暫停，自動略過 from=%s", from_number)
+        # Privacy and consent controls must work even while an operator has paused AI.
+        if self._is_delete_data_request(text):
+            self._profiles.pop(from_number, None)
+            self._last_queries.pop(from_number, None)
+            self._memory.delete_user_data(from_number)
+            self._send_text(from_number, self._delete_data_confirmation_text())
             return
 
-        current_profile = self._load_profile(from_number)
-        harness_decision = decide_message_route(text, current_profile)
-        self._memory.record_harness_trace(
-            from_number,
-            route=harness_decision.get("route", ""),
-            intent=harness_decision.get("intent", ""),
-            recommended_action=harness_decision.get("recommended_action", ""),
-            allow_llm=bool(harness_decision.get("allow_llm")),
-            llm_purpose=harness_decision.get("llm_purpose", ""),
-        )
+        if self._is_privacy_request(text):
+            self._reply(from_number, self._privacy_text())
+            return
 
-        # 關鍵詞匹配
         if normalized in RESET_KEYWORDS:
             self._profiles.pop(from_number, None)
             self._last_queries.pop(from_number, None)
@@ -2500,6 +2536,21 @@ class WhatsAppHandler:
             )
             self._reply(from_number, self._proactive_consent_text(consent_status))
             return
+
+        if self._memory.is_human_takeover(from_number):
+            logger.info("AI 已暫停，自動略過 from=%s", from_number)
+            return
+
+        current_profile = self._load_profile(from_number)
+        harness_decision = decide_message_route(text, current_profile)
+        self._memory.record_harness_trace(
+            from_number,
+            route=harness_decision.get("route", ""),
+            intent=harness_decision.get("intent", ""),
+            recommended_action=harness_decision.get("recommended_action", ""),
+            allow_llm=bool(harness_decision.get("allow_llm")),
+            llm_purpose=harness_decision.get("llm_purpose", ""),
+        )
 
         if self._is_off_topic_request(text) or self._is_out_of_scope_request(text):
             self._reply(from_number, self._off_topic_text())
@@ -2560,6 +2611,7 @@ class WhatsAppHandler:
                 "• *全部課程* — 查看精簡課程列表\n"
                 "• *更多* / *下一頁* — 查看下一批課程\n"
                 "• *重設* — 清除本次偏好\n"
+                "• *私隱* — 查看資料使用說明\n"
                 "• *報名* — 獲取報名資訊\n\n"
                 "有什麼可以幫你的嗎？"
             )
