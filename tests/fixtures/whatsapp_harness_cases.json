@@ -8,6 +8,7 @@
     "expected_intent": "",
     "expected_allow_llm": false,
     "expected_llm_purpose": "",
+    "expected_recommended_action": "recommend_after_profile_update",
     "expected_profile_patch": {
       "age_groups": ["7-12歲"],
       "pain_points": ["情緒壓力"]
@@ -22,6 +23,7 @@
     "expected_intent": "",
     "expected_allow_llm": false,
     "expected_llm_purpose": "",
+    "expected_recommended_action": "recommend_after_profile_update",
     "expected_profile_patch": {
       "age_groups": ["3-6歲", "7-12歲"]
     }
@@ -35,6 +37,7 @@
     "expected_intent": "",
     "expected_allow_llm": false,
     "expected_llm_purpose": "",
+    "expected_recommended_action": "local_refusal",
     "expected_profile_patch": {}
   },
   {
@@ -46,6 +49,7 @@
     "expected_intent": "next_page",
     "expected_allow_llm": false,
     "expected_llm_purpose": "",
+    "expected_recommended_action": "execute_local_command",
     "expected_profile_patch": {}
   },
   {
@@ -57,6 +61,7 @@
     "expected_intent": "courses",
     "expected_allow_llm": true,
     "expected_llm_purpose": "bounded_recommendation",
+    "expected_recommended_action": "recommend_courses",
     "expected_profile_patch": {}
   },
   {
@@ -68,6 +73,7 @@
     "expected_intent": "",
     "expected_allow_llm": false,
     "expected_llm_purpose": "",
+    "expected_recommended_action": "recommend_after_profile_update",
     "expected_profile_patch": {
       "age_groups": ["13-18歲"],
       "pain_points": ["情緒壓力"]
@@ -82,6 +88,7 @@
     "expected_intent": "",
     "expected_allow_llm": false,
     "expected_llm_purpose": "",
+    "expected_recommended_action": "ask_for_supported_query",
     "expected_profile_patch": {}
   }
 ]
