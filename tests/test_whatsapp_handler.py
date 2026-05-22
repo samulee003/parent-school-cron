@@ -911,6 +911,47 @@ class WhatsAppHandlerTests(unittest.TestCase):
         self.assertEqual(messages[1]["meta"]["media_id"], "media-audio-2")
         self.assertEqual(handler._memory.list_agent_flags(phone="85360000000"), [])
 
+    def test_stepfun_transcription_parses_sse_done_event(self):
+        old_provider = os.environ.get("AUDIO_TRANSCRIPTION_PROVIDER")
+        old_key = os.environ.get("STEPFUN_API_KEY")
+        old_base_url = os.environ.get("STEPFUN_BASE_URL")
+        old_model = os.environ.get("STEPFUN_ASR_MODEL")
+        os.environ["AUDIO_TRANSCRIPTION_PROVIDER"] = "stepfun"
+        os.environ["STEPFUN_API_KEY"] = "stepfun-test-key"
+        os.environ["STEPFUN_BASE_URL"] = "https://stepfun.example/v1"
+        os.environ["STEPFUN_ASR_MODEL"] = "stepaudio-2.5-asr"
+
+        class FakeStepFunResponse:
+            status_code = 200
+
+            def iter_lines(self, decode_unicode=True):
+                yield 'data: {"type":"transcript.text.delta","delta":"小朋友13歲"}'
+                yield 'data: {"type":"transcript.text.done","text":"小朋友13歲，想家長課"}'
+
+        handler, _sent = self.make_handler()
+        try:
+            with patch("whatsapp_handler.requests.post", return_value=FakeStepFunResponse()) as post:
+                transcript = handler._transcribe_audio_bytes(b"voice-bytes", "audio/ogg; codecs=opus")
+        finally:
+            for key, value in [
+                ("AUDIO_TRANSCRIPTION_PROVIDER", old_provider),
+                ("STEPFUN_API_KEY", old_key),
+                ("STEPFUN_BASE_URL", old_base_url),
+                ("STEPFUN_ASR_MODEL", old_model),
+            ]:
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+
+        self.assertEqual(transcript, "小朋友13歲，想家長課")
+        args, kwargs = post.call_args
+        self.assertEqual(args[0], "https://stepfun.example/v1/audio/asr/sse")
+        self.assertTrue(kwargs["stream"])
+        self.assertEqual(kwargs["headers"]["Accept"], "text/event-stream")
+        self.assertEqual(kwargs["json"]["audio"]["input"]["format"]["type"], "ogg")
+        self.assertEqual(kwargs["json"]["audio"]["input"]["transcription"]["model"], "stepaudio-2.5-asr")
+
     def test_detail_request_returns_link_for_visible_course(self):
         handler, sent = self.make_handler()
 

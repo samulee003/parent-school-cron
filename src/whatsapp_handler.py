@@ -6,6 +6,7 @@
 
 import logging
 import os
+import base64
 import hashlib
 import hmac
 import inspect
@@ -229,6 +230,26 @@ def get_proactive_template_name() -> str:
 
 def get_proactive_template_language() -> str:
     return os.environ.get("WHATSAPP_PROACTIVE_TEMPLATE_LANGUAGE", "zh_HK").strip() or "zh_HK"
+
+
+def get_transcription_provider() -> str:
+    provider = os.environ.get("AUDIO_TRANSCRIPTION_PROVIDER", "auto").strip().lower()
+    if provider not in {"auto", "stepfun", "openai"}:
+        logger.warning("AUDIO_TRANSCRIPTION_PROVIDER 無效，使用 auto")
+        return "auto"
+    return provider
+
+
+def get_stepfun_api_key() -> str:
+    return os.environ.get("STEPFUN_API_KEY", "").strip()
+
+
+def get_stepfun_base_url() -> str:
+    return os.environ.get("STEPFUN_BASE_URL", "https://api.stepfun.com/v1").rstrip("/")
+
+
+def get_stepfun_asr_model() -> str:
+    return os.environ.get("STEPFUN_ASR_MODEL", "stepaudio-2.5-asr").strip() or "stepaudio-2.5-asr"
 
 
 def get_openai_api_key() -> str:
@@ -502,6 +523,17 @@ class WhatsAppHandler:
     def _is_openai_supported_audio_suffix(suffix: str) -> bool:
         return suffix in {".mp3", ".mp4", ".mpeg", ".mpga", ".m4a", ".wav", ".webm"}
 
+    @staticmethod
+    def _stepfun_audio_format_type(mime_type: str) -> str:
+        mime = (mime_type or "").lower()
+        if "ogg" in mime or "opus" in mime:
+            return "ogg"
+        if "mpeg" in mime or "mp3" in mime:
+            return "mp3"
+        if "wav" in mime:
+            return "wav"
+        return ""
+
     def _download_whatsapp_media(self, media_id: str) -> Optional[Dict[str, Any]]:
         if not media_id or not self.access_token:
             return None
@@ -600,12 +632,192 @@ class WhatsAppHandler:
             "mime_type": "audio/webm",
         }
 
-    def _transcribe_audio_bytes(self, content: bytes, mime_type: str) -> Optional[str]:
+    def _parse_stepfun_sse_transcript(self, response: requests.Response) -> Optional[str]:
+        deltas: List[str] = []
+        last_error = ""
+        for raw_line in response.iter_lines(decode_unicode=True):
+            line = str(raw_line or "").strip()
+            if not line or line.startswith(":"):
+                continue
+            if not line.startswith("data:"):
+                continue
+            data = line[len("data:"):].strip()
+            if not data or data == "[DONE]":
+                continue
+            try:
+                event = json.loads(data)
+            except json.JSONDecodeError:
+                continue
+            event_type = str(event.get("type", "") or "")
+            if event_type == "transcript.text.done":
+                transcript = str(event.get("text", "") or "").strip()
+                if transcript:
+                    return transcript
+            if event_type == "transcript.text.delta":
+                delta = str(event.get("delta", "") or "")
+                if delta:
+                    deltas.append(delta)
+            if event_type == "error":
+                last_error = str(event.get("message", "") or "")
+
+        transcript = "".join(deltas).strip()
+        if transcript:
+            return transcript
+        if last_error:
+            self._last_transcription_error = {
+                "provider": "stepfun",
+                "error_code": "stepfun_sse_error",
+                "message": last_error[:220],
+            }
+        return None
+
+    def _transcribe_audio_bytes_stepfun(self, content: bytes, mime_type: str) -> Optional[str]:
+        api_key = get_stepfun_api_key()
+        if not api_key:
+            logger.info("STEPFUN_API_KEY 未配置，略過 StepFun 語音轉文字")
+            self._last_transcription_error = {
+                "provider": "stepfun",
+                "error_code": "missing_stepfun_api_key",
+            }
+            return None
+
+        format_type = self._stepfun_audio_format_type(mime_type)
+        audio_content = content
+        if not format_type:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                prepared = self._prepare_audio_for_stepfun(content, mime_type, tmpdir)
+                if not prepared:
+                    self._last_transcription_error = {
+                        "provider": "stepfun",
+                        "error_code": "audio_prepare_failed",
+                    }
+                    return None
+                with open(prepared["path"], "rb") as f:
+                    audio_content = f.read()
+                format_type = str(prepared["format_type"])
+
+        payload = {
+            "audio": {
+                "data": base64.b64encode(audio_content).decode("ascii"),
+                "input": {
+                    "transcription": {
+                        "language": "zh",
+                        "hotwords": ["澳門家長學堂", "家長學堂", "課程", "小朋友", "親子", "情緒", "學習"],
+                        "model": get_stepfun_asr_model(),
+                        "enable_itn": True,
+                        "enable_timestamp": False,
+                    },
+                    "format": {
+                        "type": format_type,
+                    },
+                },
+            }
+        }
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "Accept": "text/event-stream",
+        }
+        try:
+            resp = requests.post(
+                f"{get_stepfun_base_url()}/audio/asr/sse",
+                headers=headers,
+                json=payload,
+                stream=True,
+                timeout=get_transcription_timeout(),
+            )
+            if resp.status_code != 200:
+                message = ""
+                error_code = ""
+                try:
+                    error_payload = resp.json()
+                    error = error_payload.get("error") or error_payload
+                    message = str(error.get("message", "") or "")
+                    error_code = str(error.get("code", "") or "")
+                except Exception:
+                    message = resp.text[:220]
+                self._last_transcription_error = {
+                    "provider": "stepfun",
+                    "status_code": resp.status_code,
+                    "error_code": error_code or f"http_{resp.status_code}",
+                    "message": message[:220],
+                }
+                logger.warning(
+                    "StepFun 語音轉文字失敗: status=%s code=%s",
+                    resp.status_code,
+                    error_code,
+                )
+                return None
+            transcript = self._parse_stepfun_sse_transcript(resp)
+            if not transcript and not self._last_transcription_error:
+                self._last_transcription_error = {
+                    "provider": "stepfun",
+                    "error_code": "empty_transcript",
+                }
+            return transcript
+        except Exception as exc:
+            logger.warning("StepFun 語音轉文字異常: %s", exc)
+            self._last_transcription_error = {
+                "provider": "stepfun",
+                "error_code": "transcription_exception",
+                "error_type": exc.__class__.__name__,
+            }
+            return None
+
+    def _prepare_audio_for_stepfun(
+        self,
+        content: bytes,
+        mime_type: str,
+        tmpdir: str,
+    ) -> Optional[Dict[str, str]]:
+        source_suffix = self._audio_suffix_from_mime(mime_type)
+        source_path = os.path.join(tmpdir, f"whatsapp-audio{source_suffix}")
+        with open(source_path, "wb") as f:
+            f.write(content)
+
+        ffmpeg_path = shutil.which("ffmpeg")
+        if not ffmpeg_path:
+            logger.warning("WhatsApp audio 是 %s，但環境沒有 ffmpeg 可轉成 StepFun 格式", mime_type or source_suffix)
+            return None
+
+        output_path = os.path.join(tmpdir, "whatsapp-audio.wav")
+        try:
+            subprocess.run(
+                [
+                    ffmpeg_path,
+                    "-y",
+                    "-hide_banner",
+                    "-loglevel",
+                    "error",
+                    "-i",
+                    source_path,
+                    "-vn",
+                    "-ac",
+                    "1",
+                    "-ar",
+                    "16000",
+                    output_path,
+                ],
+                check=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                timeout=30,
+            )
+        except Exception as exc:
+            logger.warning("WhatsApp audio 轉 StepFun wav 失敗: %s", exc)
+            return None
+
+        return {"path": output_path, "format_type": "wav"}
+
+    def _transcribe_audio_bytes_openai(self, content: bytes, mime_type: str) -> Optional[str]:
         self._last_transcription_error = {}
         api_key = get_openai_api_key()
         if not api_key:
             logger.info("OPENAI_API_KEY 未配置，略過 WhatsApp 語音轉文字")
-            self._last_transcription_error = {"error_code": "missing_openai_api_key"}
+            self._last_transcription_error = {
+                "provider": "openai",
+                "error_code": "missing_openai_api_key",
+            }
             return None
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -647,6 +859,7 @@ class WhatsAppHandler:
                     except Exception:
                         pass
                     self._last_transcription_error = {
+                        "provider": "openai",
                         "status_code": resp.status_code,
                         "error_type": error_type,
                         "error_code": error_code,
@@ -662,16 +875,34 @@ class WhatsAppHandler:
                 transcript = str(result.get("text", "") or "").strip()
                 if not transcript:
                     logger.warning("OpenAI 語音轉文字回傳空白")
-                    self._last_transcription_error = {"error_code": "empty_transcript"}
+                    self._last_transcription_error = {
+                        "provider": "openai",
+                        "error_code": "empty_transcript",
+                    }
                     return None
                 return transcript
             except Exception as exc:
                 logger.warning("OpenAI 語音轉文字異常: %s", exc)
                 self._last_transcription_error = {
+                    "provider": "openai",
                     "error_code": "transcription_exception",
                     "error_type": exc.__class__.__name__,
                 }
                 return None
+
+    def _transcribe_audio_bytes(self, content: bytes, mime_type: str) -> Optional[str]:
+        self._last_transcription_error = {}
+        provider = get_transcription_provider()
+        if provider == "stepfun":
+            return self._transcribe_audio_bytes_stepfun(content, mime_type)
+        if provider == "openai":
+            return self._transcribe_audio_bytes_openai(content, mime_type)
+
+        if get_stepfun_api_key():
+            transcript = self._transcribe_audio_bytes_stepfun(content, mime_type)
+            if transcript:
+                return transcript
+        return self._transcribe_audio_bytes_openai(content, mime_type)
 
     def _transcribe_audio_message(self, media_id: str, mime_type: str = "") -> Optional[str]:
         media = self._download_whatsapp_media(media_id)
