@@ -55,6 +55,10 @@ OFF_TOPIC_KEYWORDS = (
     "醫生", "医生", "診所", "诊所", "藥", "药", "感冒", "python",
     "javascript", "寫code", "写code", "寫程式", "写程序",
 )
+BARE_AGE_CONTEXT_KEYWORDS = (
+    "小朋友", "孩子", "子女", "仔女", "兒子", "儿子", "女兒", "女儿",
+    "仔", "女", "age", "歲數", "岁数",
+)
 PAIN_POINT_RULES = [
     {
         "tag": "情緒壓力",
@@ -173,6 +177,22 @@ def _ordered_groups(groups: List[str]) -> List[str]:
     return [age for age in AGE_GROUP_LABELS if age in seen]
 
 
+def _should_parse_bare_numbers(normalized: str) -> bool:
+    if re.search(r"\d{4}\s*[/-]\s*\d{1,2}\s*[/-]\s*\d{1,2}", normalized):
+        return False
+    if re.fullmatch(r"(?:page|detail)\s*\d{1,3}", normalized):
+        return False
+    if re.fullmatch(r"詳情\s*\d{1,3}", normalized):
+        return False
+    if re.fullmatch(r"第\s*\d{1,3}\s*(?:頁|页)", normalized):
+        return False
+    if re.fullmatch(r"\d{1,2}", normalized):
+        return True
+    if re.fullmatch(r"\d{1,2}(?:\s*(?:and|和|同|,|，|、|&|\+)\s*\d{1,2})+", normalized):
+        return True
+    return any(keyword in normalized for keyword in BARE_AGE_CONTEXT_KEYWORDS)
+
+
 def detect_child_age_groups(text: str) -> List[str]:
     """Detect child age groups from age values and school-stage hints."""
     normalized = normalize_parent_text(text).lower().replace("岁", "歲")
@@ -191,10 +211,11 @@ def detect_child_age_groups(text: str) -> List[str]:
         if group and group not in groups:
             groups.append(group)
 
-    for match in re.finditer(r"(?<![\w.])(\d{1,2})(?![\w.])", normalized):
-        group = age_to_group(float(match.group(1)))
-        if group and group not in groups:
-            groups.append(group)
+    if _should_parse_bare_numbers(normalized):
+        for match in re.finditer(r"(?<!\d)(\d{1,2})(?!\d)", normalized):
+            group = age_to_group(float(match.group(1)))
+            if group and group not in groups:
+                groups.append(group)
 
     for age in AGE_GROUP_LABELS:
         if age.lower() in normalized and age not in groups:

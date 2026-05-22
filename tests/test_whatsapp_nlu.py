@@ -42,10 +42,17 @@ class WhatsAppNluTests(unittest.TestCase):
         self.assertEqual(whatsapp_nlu.detect_child_age_groups("八歲，情緒"), ["7-12歲"])
         self.assertEqual(whatsapp_nlu.detect_child_age_groups("十三歲想搵情緒課"), ["13-18歲"])
         self.assertEqual(whatsapp_nlu.detect_child_age_groups("8 and 6"), ["3-6歲", "7-12歲"])
+        self.assertEqual(whatsapp_nlu.detect_child_age_groups("8"), ["7-12歲"])
+        self.assertEqual(whatsapp_nlu.detect_child_age_groups("小朋友8"), ["7-12歲"])
         self.assertEqual(
             whatsapp_nlu.detect_child_age_groups("大仔中學，細仔幼稚園"),
             ["3-6歲", "13-18歲"],
         )
+
+    def test_detect_child_age_groups_ignores_command_and_date_numbers(self):
+        for text in ["page 2", "detail 1", "詳情1", "第2頁", "2026/06/20"]:
+            with self.subTest(text=text):
+                self.assertEqual(whatsapp_nlu.detect_child_age_groups(text), [])
 
     def test_detect_local_intent(self):
         for text in ["更多", "下一頁", "還有嗎"]:

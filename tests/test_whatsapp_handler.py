@@ -213,6 +213,9 @@ class WhatsAppHandlerTests(unittest.TestCase):
         self.assertEqual(detect_age_groups("兩歲和十歲"), ["0-2歲", "7-12歲"])
         self.assertEqual(detect_child_age_groups("8 and 6"), ["3-6歲", "7-12歲"])
         self.assertEqual(detect_age_groups("8 and 6"), ["3-6歲", "7-12歲"])
+        self.assertEqual(detect_age_groups("page 2"), [])
+        self.assertEqual(detect_age_groups("detail 1"), [])
+        self.assertEqual(detect_age_groups("2026/06/20"), [])
 
     def test_llm_semantic_extraction_handles_natural_age_reply(self):
         courses = [

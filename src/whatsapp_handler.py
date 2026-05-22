@@ -34,34 +34,11 @@ def get_graph_api_base() -> str:
     return f"https://graph.facebook.com/{version}"
 
 
-AGE_KEYWORDS = {
-    "0-2歲": ("0-2", "0至2", "0到2", "嬰兒", "嬰幼", "寶寶", "bb"),
-    "3-6歲": ("3-6", "3至6", "3到6", "幼兒", "幼稚園", "幼兒園"),
-    "7-12歲": ("7-12", "7至12", "7到12", "小學", "小學生", "兒童"),
-    "13-18歲": ("13-18", "13至18", "13到18", "中學", "中學生", "青少年"),
-}
-CHINESE_NUMERAL_VALUES = {
-    "零": 0,
-    "〇": 0,
-    "一": 1,
-    "二": 2,
-    "兩": 2,
-    "两": 2,
-    "三": 3,
-    "四": 4,
-    "五": 5,
-    "六": 6,
-    "七": 7,
-    "八": 8,
-    "九": 9,
-}
-
+AGE_KEYWORDS = whatsapp_nlu.AGE_KEYWORDS
+CHINESE_NUMERAL_VALUES = whatsapp_nlu.CHINESE_NUMERAL_VALUES
 PAGE_SIZE = 3
-NEXT_PAGE_KEYWORDS = {
-    "更多", "下一頁", "下頁", "還有嗎", "還有沒有", "還有",
-    "有其他嗎", "還有別的嗎", "再來", "繼續", "more", "next",
-}
-ALL_COURSE_KEYWORDS = {"全部課程", "全部", "all"}
+NEXT_PAGE_KEYWORDS = whatsapp_nlu.NEXT_PAGE_KEYWORDS
+ALL_COURSE_KEYWORDS = whatsapp_nlu.ALL_COURSE_KEYWORDS
 RESET_KEYWORDS = {"重設", "重新設定", "reset"}
 PROFILE_KEYWORDS = {"我的偏好", "偏好", "設定", "狀態", "profile"}
 PROACTIVE_ALLOW_KEYWORDS = {
@@ -81,96 +58,22 @@ BARE_RECOMMENDATION_COMMANDS = {
     "推薦", "推介", "有推薦嗎", "有推介嗎", "有咩推薦", "有咩推介",
     "有冇推薦", "有冇推介", "幫我推薦", "幫我推介", "幫我揀", "幫我選",
 }
-COURSE_DOMAIN_KEYWORDS = (
-    "課程", "课程", "course", "家長學堂", "家长学堂", "活動", "活动",
-    "講座", "讲座", "工作坊", "報名", "报名", "親子", "亲子",
-    "家長", "家长", "小朋友", "孩子", "子女", "嬰幼", "婴幼",
-    "幼兒", "幼儿", "小學", "小学", "青少年", "中學", "中学",
-)
-COURSE_INTENT_KEYWORDS = (
-    "課程", "课程", "course", "最新", "推薦", "推荐", "推介",
-    "幫我揀", "帮我揀", "幫我選", "帮我选", "報名", "报名",
-    "搵", "找", "搜尋", "搜索", "查詢", "查询", "查找", "search",
-)
+COURSE_DOMAIN_KEYWORDS = whatsapp_nlu.COURSE_DOMAIN_KEYWORDS
+COURSE_INTENT_KEYWORDS = whatsapp_nlu.COURSE_INTENT_KEYWORDS
 PARENT_CONTEXT_KEYWORDS = (
     "小朋友", "孩子", "子女", "仔女", "兒子", "儿子", "女兒", "女儿",
     "我個仔", "我个仔", "我個女", "我个女", "家長", "家长", "父母",
     "媽媽", "妈妈", "爸爸", "幼兒", "幼儿", "小學生", "小学生",
     "中學生", "中学生", "青少年", "bb", "寶寶", "宝宝",
 )
-OFF_TOPIC_KEYWORDS = (
-    "餐廳", "餐厅", "外賣", "外卖", "酒店", "機票", "机票", "航班",
-    "天氣", "天气", "股票", "投資", "投资", "幣", "币", "匯率", "汇率",
-    "作文", "翻譯", "翻译", "新聞", "新闻", "電影", "电影", "音樂", "音乐",
-    "遊戲", "游戏", "食譜", "食谱", "功課", "功课", "數學題", "数学题",
-    "醫生", "医生", "診所", "诊所", "藥", "药", "感冒", "python",
-    "javascript", "寫code", "写code", "寫程式", "写程序",
-)
+OFF_TOPIC_KEYWORDS = whatsapp_nlu.OFF_TOPIC_KEYWORDS
 OUT_OF_SCOPE_AI_KEYWORDS = (
     "chatgpt", "openai", "deepseek", "claude", "生成式ai", "生成式 ai",
     "人工智能", "ai工具", "ai 工具", "大模型", "論文", "论文",
 )
 LONG_MESSAGE_OFF_TOPIC_CHARS = 120
 LLM_PROFILE_EXTRACTION_MAX_CHARS = 180
-PAIN_POINT_RULES = [
-    {
-        "tag": "情緒壓力",
-        "topic": "身心健康",
-        "keywords": (
-            "情緒", "情绪", "焦慮", "焦虑", "壓力", "压力", "發脾氣", "发脾气",
-            "易怒", "暴躁", "抑鬱", "抑郁", "心情", "哭", "青春期",
-        ),
-    },
-    {
-        "tag": "親子溝通",
-        "topic": "家庭關係",
-        "keywords": (
-            "溝通", "沟通", "頂嘴", "顶嘴", "衝突", "冲突", "吵架",
-            "反叛", "叛逆", "不聽話", "不听话", "管教", "親子關係", "亲子关系",
-        ),
-    },
-    {
-        "tag": "學習動機",
-        "topic": "學習與成就感",
-        "keywords": (
-            "學習", "学习", "功課", "功课", "成績", "成绩", "考試", "考试",
-            "專注", "专注", "拖延", "讀書", "读书", "動機", "动机",
-        ),
-    },
-    {
-        "tag": "環境適應",
-        "topic": "環境適應",
-        "keywords": (
-            "適應", "适应", "入學", "入学", "轉校", "转校", "升小",
-            "升中", "分離", "分离", "新環境", "新环境",
-        ),
-    },
-    {
-        "tag": "社交人際",
-        "topic": "社會人際關係",
-        "keywords": (
-            "交朋友", "無朋友", "沒有朋友", "冇朋友", "朋友少",
-            "同學", "同学", "社交", "人際", "人际", "欺凌",
-            "孤立", "群體", "群体", "相處", "相处",
-        ),
-    },
-    {
-        "tag": "生活照顧",
-        "topic": "生活照顧",
-        "keywords": (
-            "睡眠", "瞓覺", "睡覺", "吃飯", "食飯", "飲食", "自理",
-            "如廁", "戒片", "生活習慣", "生活习惯",
-        ),
-    },
-    {
-        "tag": "科技使用",
-        "topic": "科技素養",
-        "keywords": (
-            "手機", "手机", "打機", "遊戲", "游戏", "上網", "上网",
-            "短片", "平板", "網絡", "网络", "沉迷",
-        ),
-    },
-]
+PAIN_POINT_RULES = whatsapp_nlu.PAIN_POINT_RULES
 
 ONBOARDING_QUESTION = (
     "我先幫你縮窄，不直接丟一堆課程。\n\n"
