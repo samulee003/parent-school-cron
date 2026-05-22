@@ -790,6 +790,23 @@ class WhatsAppMemoryStore:
                 ).fetchall()
         return [self._qa_feedback_row_to_dict(row) for row in rows]
 
+    def list_qa_feedback_for_eval(self, limit: int = 100) -> List[Dict[str, Any]]:
+        """Return recent QA feedback rows for scrubbed eval-case export."""
+        limit = max(1, min(int(limit or 100), 200))
+        with self._lock:
+            with closing(sqlite3.connect(str(self.db_path))) as conn:
+                conn.row_factory = sqlite3.Row
+                rows = conn.execute(
+                    """
+                    SELECT *
+                    FROM whatsapp_qa_feedback
+                    ORDER BY created_at DESC, id DESC
+                    LIMIT ?
+                    """,
+                    (limit,),
+                ).fetchall()
+        return [self._qa_feedback_row_to_dict(row) for row in rows]
+
     def mark_qa_feedback(self, feedback_id: int, status: str = "closed") -> Dict[str, Any]:
         clean_status = self._clean_qa_status(status)
         if not feedback_id:

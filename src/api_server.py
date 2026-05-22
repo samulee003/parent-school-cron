@@ -12,7 +12,7 @@ import hashlib
 import hmac
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Any, Dict, List, Optional
 
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
@@ -320,6 +320,38 @@ def _build_qa_learning_sample(
             "pain_summary": _scrub_private_text(profile.get("pain_summary", "")),
         },
         "privacy": "phone/email-like strings scrubbed; original transcript stays admin-only",
+    }
+
+
+def _scrub_private_value(value: Any) -> Any:
+    if isinstance(value, str):
+        return _scrub_private_text(value)
+    if isinstance(value, list):
+        return [_scrub_private_value(item) for item in value]
+    if isinstance(value, dict):
+        return {
+            key: _scrub_private_value(item)
+            for key, item in value.items()
+            if str(key).lower() != "phone"
+        }
+    return value
+
+
+def _build_qa_eval_case(feedback: Dict[str, Any]) -> Dict[str, Any]:
+    sample = feedback.get("anonymized_sample") or {}
+    profile = _scrub_private_value(sample.get("profile") or {})
+    return {
+        "source": "admin_qa_feedback",
+        "feedback_id": feedback.get("id", 0),
+        "issue_type": feedback.get("issue_type", ""),
+        "rating": feedback.get("rating", ""),
+        "summary": _scrub_private_text(feedback.get("summary", "")),
+        "expected_behavior": _scrub_private_text(feedback.get("expected_behavior", "")),
+        "parent_message": _scrub_private_text(sample.get("parent_message", "")),
+        "ai_response": _scrub_private_text(sample.get("ai_response", "")),
+        "profile": profile,
+        "privacy": "scrubbed",
+        "created_at": feedback.get("created_at", ""),
     }
 
 
@@ -1944,6 +1976,21 @@ async def api_whatsapp_qa_feedback(
         limit=limit,
     )
     return {"total": len(feedback), "feedback": feedback}
+
+
+@app.get("/api/whatsapp/qa-feedback/eval-cases")
+async def api_whatsapp_qa_feedback_eval_cases(
+    request: Request,
+    limit: int = 100,
+):
+    """Export privacy-scrubbed QA feedback candidates for eval-case review."""
+    require_admin_request(request)
+    feedback = get_wa_memory_store().list_qa_feedback_for_eval(limit=limit)
+    cases: List[Dict[str, Any]] = [
+        _build_qa_eval_case(item)
+        for item in feedback
+    ]
+    return {"total": len(cases), "cases": cases}
 
 
 @app.post("/api/whatsapp/conversations/{phone}/qa-feedback")

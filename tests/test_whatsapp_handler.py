@@ -2045,6 +2045,63 @@ class WhatsAppHandlerTests(unittest.TestCase):
             else:
                 os.environ["ADMIN_SECRET"] = old_admin
 
+    def test_admin_qa_feedback_eval_cases_export_scrubbed_samples(self):
+        handler, sent = self.make_handler()
+        handler._handle_text_message("85360000002", "我的電話是 +853 6123 9999，想找親子活動")
+        ai_message = handler._memory.get_messages("85360000002")[-1]
+
+        old_admin = os.environ.get("ADMIN_SECRET")
+        old_handler = api_server.wa_handler
+        old_memory = api_server.wa_memory
+        os.environ["ADMIN_SECRET"] = "admin-secret"
+        api_server.wa_handler = handler
+        api_server.wa_memory = handler._memory
+        try:
+            with self.assertRaises(HTTPException) as auth_ctx:
+                asyncio.run(api_server.api_whatsapp_qa_feedback_eval_cases(
+                    request=self.admin_request(secret="", cookie="wrong-cookie"),
+                ))
+            self.assertEqual(auth_ctx.exception.status_code, 401)
+
+            asyncio.run(api_server.api_whatsapp_add_qa_feedback(
+                "85360000002",
+                api_server.QaFeedbackRequest(
+                    message_id=ai_message["id"],
+                    rating="bad",
+                    issue_type="missed_course",
+                    summary="家長 +853 6123 9999 想找活動，但回覆太泛",
+                    expected_behavior="不要暴露 85360000002，應先追問孩子年齡與痛點",
+                ),
+                request=self.admin_request(),
+            ))
+
+            exported = asyncio.run(api_server.api_whatsapp_qa_feedback_eval_cases(
+                request=self.admin_request(),
+            ))
+
+            self.assertEqual(exported["total"], 1)
+            case = exported["cases"][0]
+            serialized = json.dumps(case, ensure_ascii=False)
+            self.assertEqual(case["source"], "admin_qa_feedback")
+            self.assertEqual(case["privacy"], "scrubbed")
+            self.assertEqual(case["issue_type"], "missed_course")
+            self.assertIn("summary", case)
+            self.assertIn("expected_behavior", case)
+            self.assertIn("parent_message", case)
+            self.assertIn("ai_response", case)
+            self.assertIn("[phone]", serialized)
+            self.assertNotIn("+853 6123 9999", serialized)
+            self.assertNotIn("6123", serialized)
+            self.assertNotIn("85360000002", serialized)
+            self.assertNotIn("phone", case)
+        finally:
+            api_server.wa_handler = old_handler
+            api_server.wa_memory = old_memory
+            if old_admin is None:
+                os.environ.pop("ADMIN_SECRET", None)
+            else:
+                os.environ["ADMIN_SECRET"] = old_admin
+
     def test_whatsapp_admin_dashboard_contains_agent_inbox_controls(self):
         old_admin = os.environ.get("ADMIN_SECRET")
         os.environ["ADMIN_SECRET"] = "admin-secret"
