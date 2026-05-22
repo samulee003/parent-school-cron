@@ -62,10 +62,7 @@ BARE_RECOMMENDATION_COMMANDS = {
 COURSE_DOMAIN_KEYWORDS = whatsapp_nlu.COURSE_DOMAIN_KEYWORDS
 COURSE_INTENT_KEYWORDS = whatsapp_nlu.COURSE_INTENT_KEYWORDS
 PARENT_CONTEXT_KEYWORDS = (
-    "小朋友", "孩子", "子女", "仔女", "兒子", "儿子", "女兒", "女儿",
-    "我個仔", "我个仔", "我個女", "我个女", "家長", "家长", "父母",
-    "媽媽", "妈妈", "爸爸", "幼兒", "幼儿", "小學生", "小学生",
-    "中學生", "中学生", "青少年", "bb", "寶寶", "宝宝",
+    *whatsapp_nlu.PARENT_CONTEXT_KEYWORDS,
 )
 OFF_TOPIC_KEYWORDS = whatsapp_nlu.OFF_TOPIC_KEYWORDS
 OUT_OF_SCOPE_AI_KEYWORDS = (
@@ -1100,8 +1097,7 @@ class WhatsAppHandler:
 
     @staticmethod
     def _is_off_topic_request(text: str) -> bool:
-        text_lower = text.strip().lower()
-        return any(k in text_lower for k in OFF_TOPIC_KEYWORDS)
+        return whatsapp_nlu.is_hard_off_topic(text)
 
     @staticmethod
     def _has_course_signal(text: str) -> bool:
@@ -2054,10 +2050,17 @@ class WhatsAppHandler:
         if normalized in {"ok", "okay", "好", "好的", "收到", "謝謝", "谢谢", "thanks", "thank you"}:
             return False
         if any(ch.isdigit() for ch in normalized):
-            return True
+            return bool(detect_child_age_groups(normalized))
         if re.search(r"[零〇一二兩两三四五六七八九十]{1,3}\s*歲", normalized):
             return True
-        if any(k in normalized for k in ["歲", "岁", "小朋友", "孩子", "仔", "女", "情緒", "學習", "升學", "親子", "溝通", "壓力", "搵", "找"]):
+        if any(
+            k in normalized
+            for k in [
+                "歲", "岁", "小朋友", "孩子", "子女", "仔女", "兒子", "儿子",
+                "女兒", "女儿", "大仔", "細仔", "细仔", "情緒", "學習",
+                "升學", "親子", "溝通", "壓力", "搵", "找",
+            ]
+        ):
             return True
         return bool(profile and WhatsAppHandler._profile_has_signal(profile))
 
@@ -2160,9 +2163,13 @@ class WhatsAppHandler:
         domain_flag = None
         if "in_domain" in payload:
             domain_flag = self._coerce_llm_bool(payload.get("in_domain"))
+            if domain_flag is None:
+                return {}
         if domain_flag is None and "is_course_related" in payload:
             domain_flag = self._coerce_llm_bool(payload.get("is_course_related"))
-        if domain_flag is False:
+            if domain_flag is None:
+                return {}
+        if domain_flag is not True:
             return {}
 
         valid_age_groups = set(options["age_groups"])
@@ -2494,10 +2501,7 @@ class WhatsAppHandler:
             self._reply(from_number, self._proactive_consent_text(consent_status))
             return
 
-        if (
-            (self._is_off_topic_request(text) and not self._has_parent_pain_signal(text))
-            or self._is_out_of_scope_request(text)
-        ):
+        if self._is_off_topic_request(text) or self._is_out_of_scope_request(text):
             self._reply(from_number, self._off_topic_text())
             return
 

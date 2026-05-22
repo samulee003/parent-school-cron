@@ -354,6 +354,42 @@ class WhatsAppHandlerTests(unittest.TestCase):
         self.assertEqual(updated, {})
         self.assertEqual(handler._memory.get_profile("85360000000"), {})
 
+    def test_llm_profile_extraction_rejects_invalid_domain_flag(self):
+        handler, _sent = self.make_handler()
+
+        class FakeDeepSeekResponse:
+            status_code = 200
+            text = "ok"
+
+            def json(self):
+                return {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": json.dumps(
+                                    {
+                                        "in_domain": "maybe",
+                                        "age_groups": ["13-18歲"],
+                                        "confidence": 0.9,
+                                    },
+                                    ensure_ascii=False,
+                                )
+                            }
+                        }
+                    ]
+                }
+
+        with patch.dict(os.environ, {"DEEPSEEK_API_KEY": "test-key"}, clear=False):
+            with patch("whatsapp_handler.requests.post") as post:
+                post.return_value = FakeDeepSeekResponse()
+                extracted = handler._llm_extract_profile_update(
+                    "85360000000",
+                    "小朋友13歲",
+                    {},
+                )
+
+        self.assertEqual(extracted, {})
+
     def test_llm_profile_extraction_low_confidence_asks_clarifying_question(self):
         handler, sent = self.make_handler()
         handler._memory.save_profile("85360000000", {"pain_points": ["情緒壓力"]})
@@ -897,6 +933,34 @@ class WhatsAppHandlerTests(unittest.TestCase):
 
         self.assertFalse(post.called)
         self.assertIn("只協助查詢和推薦", sent[0][1])
+        self.assertEqual(handler._load_profile("85360000000"), {})
+
+    def test_off_topic_message_with_child_age_and_pain_fails_closed(self):
+        handler, sent = self.make_handler()
+
+        with patch.dict(os.environ, {"DEEPSEEK_API_KEY": "test-key"}, clear=False):
+            with patch("whatsapp_handler.requests.post") as post:
+                handler._handle_text_message(
+                    "85360000000",
+                    "我小朋友13歲情緒壓力大，想推薦餐廳",
+                )
+
+        conversation = handler._memory.get_conversation("85360000000")
+        self.assertFalse(post.called)
+        self.assertIn("只協助查詢和推薦", sent[0][1])
+        self.assertEqual(handler._load_profile("85360000000"), {})
+        self.assertEqual(conversation["last_harness_route"], "off_topic")
+        self.assertEqual(conversation["last_harness_allow_llm"], 0)
+
+    def test_shopping_near_miss_does_not_call_deepseek_or_update_profile(self):
+        handler, sent = self.make_handler()
+
+        with patch.dict(os.environ, {"DEEPSEEK_API_KEY": "test-key"}, clear=False):
+            with patch("whatsapp_handler.requests.post") as post:
+                handler._handle_text_message("85360000000", "牛仔褲8折邊度買")
+
+        self.assertFalse(post.called)
+        self.assertIn("澳門家長學堂課程", sent[0][1])
         self.assertEqual(handler._load_profile("85360000000"), {})
 
     def test_unrelated_latest_question_does_not_call_deepseek(self):

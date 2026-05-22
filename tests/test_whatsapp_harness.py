@@ -27,6 +27,15 @@ class WhatsAppHarnessTests(unittest.TestCase):
         self.assertFalse(decision["allow_llm"])
         self.assertEqual(decision["recommended_action"], "local_refusal")
 
+    def test_mixed_off_topic_with_parent_pain_still_fails_closed(self):
+        for text in ["我小朋友13歲情緒壓力大，想推薦餐廳", "推薦餐廳課程"]:
+            with self.subTest(text=text):
+                decision = whatsapp_harness.decide_message_route(text, {})
+
+                self.assertEqual(decision["route"], "off_topic")
+                self.assertFalse(decision["allow_llm"])
+                self.assertEqual(decision["recommended_action"], "local_refusal")
+
     def test_exact_local_command_routes_locally(self):
         decision = whatsapp_harness.decide_message_route(
             "更多",
@@ -68,7 +77,7 @@ class WhatsAppHarnessTests(unittest.TestCase):
         self.assertEqual(decision["llm_purpose"], "profile_extraction")
 
     def test_standalone_child_characters_do_not_trigger_profile_extraction(self):
-        for text in ["我想買女裝", "牛仔褲邊度買"]:
+        for text in ["我想買女裝", "牛仔褲邊度買", "女裝8折", "我想買女裝8號"]:
             with self.subTest(text=text):
                 decision = whatsapp_harness.decide_message_route(text, {})
 

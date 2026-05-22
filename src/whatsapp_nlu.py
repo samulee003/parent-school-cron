@@ -57,7 +57,21 @@ OFF_TOPIC_KEYWORDS = (
 )
 BARE_AGE_CONTEXT_KEYWORDS = (
     "小朋友", "孩子", "子女", "仔女", "兒子", "儿子", "女兒", "女儿",
-    "仔", "女", "age", "歲數", "岁数",
+    "我個仔", "我个仔", "我個女", "我个女", "大仔", "細仔", "细仔",
+    "age", "幾歲", "几歲", "幾多歲", "幾多岁", "歲數", "岁数",
+)
+PARENT_CONTEXT_KEYWORDS = (
+    "小朋友", "孩子", "子女", "仔女", "兒子", "儿子", "女兒", "女儿",
+    "我個仔", "我个仔", "我個女", "我个女", "家長", "家长", "父母",
+    "媽媽", "妈妈", "爸爸", "幼兒", "幼儿", "小學生", "小学生",
+    "中學生", "中学生", "青少年", "bb", "寶寶", "宝宝",
+)
+SOFT_PARENT_PAIN_OFF_TOPIC_KEYWORDS = (
+    "功課", "功课", "遊戲", "游戏",
+)
+OFF_TOPIC_TASK_KEYWORDS = (
+    "答案", "解答", "題目", "题目", "數學題", "数学题", "幫我做",
+    "帮我做", "代做", "翻譯", "翻译", "作文",
 )
 PAIN_POINT_RULES = [
     {
@@ -252,9 +266,18 @@ def is_hard_off_topic(text: str) -> bool:
     normalized = normalize_parent_text(text).lower()
     if not normalized:
         return False
-    if any(keyword in normalized for keyword in COURSE_DOMAIN_KEYWORDS):
+    off_topic_hits = [
+        keyword for keyword in OFF_TOPIC_KEYWORDS
+        if keyword in normalized
+    ]
+    if not off_topic_hits:
         return False
-    return any(keyword in normalized for keyword in OFF_TOPIC_KEYWORDS)
+    if any(keyword not in SOFT_PARENT_PAIN_OFF_TOPIC_KEYWORDS for keyword in off_topic_hits):
+        return True
+    if any(keyword in normalized for keyword in OFF_TOPIC_TASK_KEYWORDS):
+        return True
+    has_parent_context = any(keyword in normalized for keyword in PARENT_CONTEXT_KEYWORDS)
+    return not (has_parent_context and detect_pain_points(normalized))
 
 
 def detect_pain_points(text: str) -> List[Dict[str, str]]:

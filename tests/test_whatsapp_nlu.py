@@ -50,7 +50,16 @@ class WhatsAppNluTests(unittest.TestCase):
         )
 
     def test_detect_child_age_groups_ignores_command_and_date_numbers(self):
-        for text in ["page 2", "detail 1", "詳情1", "第2頁", "2026/06/20"]:
+        for text in [
+            "page 2",
+            "detail 1",
+            "詳情1",
+            "第2頁",
+            "2026/06/20",
+            "牛仔褲8折邊度買",
+            "女裝8折",
+            "我想買女裝8號",
+        ]:
             with self.subTest(text=text):
                 self.assertEqual(whatsapp_nlu.detect_child_age_groups(text), [])
 
@@ -64,7 +73,10 @@ class WhatsAppNluTests(unittest.TestCase):
 
     def test_is_hard_off_topic(self):
         self.assertTrue(whatsapp_nlu.is_hard_off_topic("推薦餐廳"))
+        self.assertTrue(whatsapp_nlu.is_hard_off_topic("我小朋友13歲情緒壓力大，想推薦餐廳"))
+        self.assertTrue(whatsapp_nlu.is_hard_off_topic("推薦餐廳課程"))
         self.assertTrue(whatsapp_nlu.is_hard_off_topic("幫我寫 Python code"))
+        self.assertFalse(whatsapp_nlu.is_hard_off_topic("孩子最近做功課很拖拉"))
         self.assertFalse(whatsapp_nlu.is_hard_off_topic("青少年家長課"))
 
     def test_extract_local_profile_patch(self):
