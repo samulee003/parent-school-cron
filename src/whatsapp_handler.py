@@ -346,27 +346,13 @@ def detect_child_age_group(text: str) -> Optional[str]:
 
 def detect_child_age_groups(text: str) -> List[str]:
     """從自然語句抓多個孩子年齡，例如「4歲和13歲」。"""
-    text_lower = text.strip().lower().replace("岁", "歲")
-    groups: List[str] = []
-    for match in re.finditer(r"(\d+(?:\.\d+)?)\s*歲", text_lower):
-        group = age_to_group(float(match.group(1)))
-        if group and group not in groups:
-            groups.append(group)
-
-    for match in re.finditer(r"([零〇一二兩两三四五六七八九十]{1,3})\s*歲", text_lower):
-        age = parse_chinese_number(match.group(1))
-        if age is None:
-            continue
-        group = age_to_group(float(age))
-        if group and group not in groups:
-            groups.append(group)
-    return groups
+    return whatsapp_nlu.detect_child_age_groups(text)
 
 
 def detect_age_groups(text: str) -> List[str]:
     """從文字中找出所有年齡層線索。"""
     text_lower = text.strip().lower().replace("岁", "歲")
-    groups = detect_child_age_groups(text_lower)
+    groups = detect_child_age_groups(text)
 
     for age in AGE_GROUP_LABELS:
         if age.lower() in text_lower and age not in groups:

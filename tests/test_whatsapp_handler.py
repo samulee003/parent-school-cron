@@ -19,7 +19,7 @@ from fastapi import HTTPException
 
 import api_server
 from scraper import Course
-from whatsapp_handler import WhatsAppHandler, detect_age_groups, is_valid_meta_signature
+from whatsapp_handler import WhatsAppHandler, detect_age_groups, detect_child_age_groups, is_valid_meta_signature
 from whatsapp_memory import WhatsAppMemoryStore
 
 
@@ -211,6 +211,8 @@ class WhatsAppHandlerTests(unittest.TestCase):
         self.assertEqual(detect_age_groups("八歲，情緒"), ["7-12歲"])
         self.assertEqual(detect_age_groups("十三歲，情緒"), ["13-18歲"])
         self.assertEqual(detect_age_groups("兩歲和十歲"), ["0-2歲", "7-12歲"])
+        self.assertEqual(detect_child_age_groups("8 and 6"), ["3-6歲", "7-12歲"])
+        self.assertEqual(detect_age_groups("8 and 6"), ["3-6歲", "7-12歲"])
 
     def test_llm_semantic_extraction_handles_natural_age_reply(self):
         courses = [
@@ -256,37 +258,22 @@ class WhatsAppHandlerTests(unittest.TestCase):
             def json(self):
                 return {"choices": [{"message": {"content": self._content}}]}
 
-        extraction = json.dumps(
-            {
-                "is_course_related": True,
-                "age_groups": ["7-12歲", "3-6歲"],
-                "pain_points": [],
-                "topic": "",
-                "target": "",
-                "pain_summary": "",
-                "confidence": 0.82,
-            },
-            ensure_ascii=False,
-        )
         with patch.dict(
             os.environ,
             {"DEEPSEEK_API_KEY": "test-key", "DEEPSEEK_DAILY_LIMIT_PER_USER": "4"},
             clear=False,
         ):
             with patch("whatsapp_handler.requests.post") as post:
-                post.side_effect = [
-                    FakeDeepSeekResponse(extraction),
-                    FakeDeepSeekResponse("LLM 推薦：兒童情緒管理工作坊"),
-                ]
+                post.return_value = FakeDeepSeekResponse("LLM 推薦：兒童情緒管理工作坊")
                 handler._handle_text_message("85360000000", "情緒")
                 handler._handle_text_message("85360000000", "8 and 6")
 
         profile = handler._memory.get_profile("85360000000")
-        self.assertEqual(profile["age_groups"], ["7-12歲", "3-6歲"])
+        self.assertEqual(profile["age_groups"], ["3-6歲", "7-12歲"])
         self.assertIn("情緒壓力", profile["pain_points"])
         self.assertTrue(sent[-1][1].startswith("LLM 推薦"))
         self.assertNotIn("未能轉成課程條件", sent[-1][1])
-        self.assertEqual(post.call_count, 2)
+        self.assertEqual(post.call_count, 1)
 
     def test_greeting_does_not_use_llm_semantic_extraction(self):
         handler, sent = self.make_handler()
