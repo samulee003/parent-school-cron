@@ -13,6 +13,13 @@ import whatsapp_harness
 
 FIXTURE = Path(__file__).parent / "fixtures" / "whatsapp_harness_cases.json"
 PHONE_LIKE_DIGITS = re.compile(r"\d{6,}")
+EXPECTED_FIELDS = {
+    "route": "expected_route",
+    "intent": "expected_intent",
+    "llm_purpose": "expected_llm_purpose",
+    "allow_llm": "expected_allow_llm",
+    "profile_patch": "expected_profile_patch",
+}
 
 
 class WhatsAppHarnessEvalTests(unittest.TestCase):
@@ -27,30 +34,8 @@ class WhatsAppHarnessEvalTests(unittest.TestCase):
                 case["input"],
                 case.get("profile", {}),
             )
-            self._check_field(case, decision, "route", "expected_route", failures)
-            self._check_field(case, decision, "intent", "expected_intent", failures)
-            self._check_field(
-                case,
-                decision,
-                "llm_purpose",
-                "expected_llm_purpose",
-                failures,
-            )
-
-            expected_allow_llm = bool(case["expected_allow_llm"])
-            if bool(decision.get("allow_llm")) != expected_allow_llm:
-                failures.append(
-                    f"{case['name']}: allow_llm "
-                    f"{decision.get('allow_llm')} != {expected_allow_llm}"
-                )
-
-            patch = decision.get("profile_patch", {})
-            for key, expected_value in case.get("expected_profile_patch", {}).items():
-                if patch.get(key) != expected_value:
-                    failures.append(
-                        f"{case['name']}: profile_patch.{key} "
-                        f"{patch.get(key)} != {expected_value}"
-                    )
+            for actual_key, expected_key in EXPECTED_FIELDS.items():
+                self._check_field(case, decision, actual_key, expected_key, failures)
 
         self.assertEqual([], failures)
 
@@ -64,6 +49,7 @@ class WhatsAppHarnessEvalTests(unittest.TestCase):
 
     def _check_field(self, case, decision, actual_key, expected_key, failures):
         if expected_key not in case:
+            failures.append(f"{case['name']}: missing {expected_key}")
             return
 
         if decision.get(actual_key) != case[expected_key]:

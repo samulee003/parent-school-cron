@@ -5,7 +5,9 @@
     "input": "八歲，情緒",
     "profile": {},
     "expected_route": "local_profile_update",
+    "expected_intent": "",
     "expected_allow_llm": false,
+    "expected_llm_purpose": "",
     "expected_profile_patch": {
       "age_groups": ["7-12歲"],
       "pain_points": ["情緒壓力"]
@@ -17,7 +19,9 @@
     "input": "8 and 6",
     "profile": {"pain_points": ["親子溝通"]},
     "expected_route": "local_profile_update",
+    "expected_intent": "",
     "expected_allow_llm": false,
+    "expected_llm_purpose": "",
     "expected_profile_patch": {
       "age_groups": ["3-6歲", "7-12歲"]
     }
@@ -28,7 +32,10 @@
     "input": "推薦餐廳",
     "profile": {},
     "expected_route": "off_topic",
-    "expected_allow_llm": false
+    "expected_intent": "",
+    "expected_allow_llm": false,
+    "expected_llm_purpose": "",
+    "expected_profile_patch": {}
   },
   {
     "name": "synthetic_next_page_command",
@@ -36,8 +43,10 @@
     "input": "還有嗎",
     "profile": {"age_groups": ["13-18歲"], "pain_points": ["情緒壓力"]},
     "expected_route": "local_command",
+    "expected_intent": "next_page",
     "expected_allow_llm": false,
-    "expected_intent": "next_page"
+    "expected_llm_purpose": "",
+    "expected_profile_patch": {}
   },
   {
     "name": "synthetic_ready_profile_recommend",
@@ -45,8 +54,10 @@
     "input": "幫我揀",
     "profile": {"age_groups": ["13-18歲"], "pain_points": ["情緒壓力"]},
     "expected_route": "recommend_courses",
+    "expected_intent": "courses",
     "expected_allow_llm": true,
-    "expected_llm_purpose": "bounded_recommendation"
+    "expected_llm_purpose": "bounded_recommendation",
+    "expected_profile_patch": {}
   },
   {
     "name": "synthetic_voice_transcript_parent_school",
@@ -54,7 +65,9 @@
     "input": "小朋友十三歲想搵情緒壓力課",
     "profile": {},
     "expected_route": "local_profile_update",
+    "expected_intent": "",
     "expected_allow_llm": false,
+    "expected_llm_purpose": "",
     "expected_profile_patch": {
       "age_groups": ["13-18歲"],
       "pain_points": ["情緒壓力"]
@@ -66,6 +79,9 @@
     "input": "牛仔褲邊度買",
     "profile": {},
     "expected_route": "unknown",
-    "expected_allow_llm": false
+    "expected_intent": "",
+    "expected_allow_llm": false,
+    "expected_llm_purpose": "",
+    "expected_profile_patch": {}
   }
 ]
