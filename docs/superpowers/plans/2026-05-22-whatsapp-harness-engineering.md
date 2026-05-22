@@ -242,9 +242,9 @@ from whatsapp_nlu import (
 
 class WhatsAppNluTests(unittest.TestCase):
     def test_chinese_and_english_age_phrases_are_normalized(self):
-        self.assertEqual(detect_child_age_groups("八歲，情緒"), ["6-12歲"])
+        self.assertEqual(detect_child_age_groups("八歲，情緒"), ["7-12歲"])
         self.assertEqual(detect_child_age_groups("十三歲想搵情緒課"), ["13-18歲"])
-        self.assertEqual(detect_child_age_groups("8 and 6"), ["6-12歲"])
+        self.assertEqual(detect_child_age_groups("8 and 6"), ["3-6歲", "7-12歲"])
 
     def test_family_structure_age_phrases_are_detected(self):
         self.assertEqual(
@@ -255,7 +255,7 @@ class WhatsAppNluTests(unittest.TestCase):
     def test_local_profile_patch_extracts_obvious_concern(self):
         patch = extract_local_profile_patch("八歲，最近情緒壓力大")
 
-        self.assertEqual(patch["age_groups"], ["6-12歲"])
+        self.assertEqual(patch["age_groups"], ["7-12歲"])
         self.assertIn("情緒壓力", patch["pain_points"])
 
     def test_hard_off_topic_is_rejected_locally(self):
@@ -300,7 +300,7 @@ import re
 import unicodedata
 from typing import Any, Dict, List, Optional
 
-AGE_GROUP_OPTIONS = ["0-3歲", "3-6歲", "6-12歲", "13-18歲"]
+AGE_GROUP_OPTIONS = ["0-2歲", "3-6歲", "7-12歲", "13-18歲"]
 
 CHINESE_NUMERAL_VALUES = {
     "零": 0,
@@ -351,8 +351,8 @@ LOCAL_COMMANDS = {
 PAIN_POINT_KEYWORDS = {
     "情緒壓力": ["情緒", "壓力", "焦慮", "爆喊", "發脾氣", "青春期"],
     "親子溝通": ["親子", "溝通", "衝突", "傾偈", "頂嘴"],
-    "學習支援": ["學習", "功課", "專注", "坐定", "讀書"],
-    "升學適應": ["升學", "升中", "幼升小", "小一", "適應"],
+    "學習動機": ["學習", "功課", "專注", "坐定", "讀書"],
+    "環境適應": ["升學", "升中", "幼升小", "小一", "適應"],
 }
 
 
@@ -381,12 +381,12 @@ def parse_chinese_number(value: str) -> Optional[int]:
 def age_to_group(age: int) -> Optional[str]:
     if age < 0:
         return None
-    if age <= 3:
-        return "0-3歲"
+    if age < 3:
+        return "0-2歲"
     if age <= 6:
         return "3-6歲"
     if age <= 12:
-        return "6-12歲"
+        return "7-12歲"
     if age <= 18:
         return "13-18歲"
     return None
@@ -410,7 +410,7 @@ def detect_child_age_groups(text: str) -> List[str]:
     if "幼稚園" in text or "幼兒" in text:
         _append_unique(groups, "3-6歲")
     if "小學" in text or "小朋友" in text and any(k in text for k in ["小一", "小二", "小三", "小四", "小五", "小六"]):
-        _append_unique(groups, "6-12歲")
+        _append_unique(groups, "7-12歲")
     if "中學" in text or "青少年" in text or "teen" in lower:
         _append_unique(groups, "13-18歲")
     return groups
@@ -515,7 +515,7 @@ class WhatsAppHarnessTests(unittest.TestCase):
         self.assertEqual(decision["recommended_action"], "local_refusal")
 
     def test_exact_next_page_command_routes_locally(self):
-        decision = decide_message_route("更多", profile={"age_groups": ["6-12歲"]})
+        decision = decide_message_route("更多", profile={"age_groups": ["7-12歲"]})
 
         self.assertEqual(decision["route"], "local_command")
         self.assertEqual(decision["intent"], "next_page")
@@ -525,7 +525,7 @@ class WhatsAppHarnessTests(unittest.TestCase):
         decision = decide_message_route("八歲，情緒", profile={})
 
         self.assertEqual(decision["route"], "local_profile_update")
-        self.assertEqual(decision["profile_patch"]["age_groups"], ["6-12歲"])
+        self.assertEqual(decision["profile_patch"]["age_groups"], ["7-12歲"])
         self.assertIn("情緒壓力", decision["profile_patch"]["pain_points"])
 
     def test_short_ambiguous_in_domain_routes_to_llm_extraction(self):
@@ -931,7 +931,7 @@ Ensure the prompt asks for exactly:
 ```json
 {
   "in_domain": true,
-  "age_groups": ["0-3歲"],
+  "age_groups": ["0-2歲"],
   "pain_points": ["情緒壓力"],
   "topic": "身心健康",
   "target": "家長",
@@ -944,8 +944,8 @@ Ensure the prompt asks for exactly:
 Allowed values:
 
 ```python
-ALLOWED_LLM_AGE_GROUPS = {"0-3歲", "3-6歲", "6-12歲", "13-18歲"}
-ALLOWED_LLM_PAIN_POINTS = {"情緒壓力", "親子溝通", "學習支援", "升學適應", "親子活動", "照顧技巧"}
+ALLOWED_LLM_AGE_GROUPS = {"0-2歲", "3-6歲", "7-12歲", "13-18歲"}
+ALLOWED_LLM_PAIN_POINTS = {"情緒壓力", "親子溝通", "學習動機", "環境適應", "社交人際", "生活照顧", "科技使用"}
 ALLOWED_LLM_TOPICS = set(TOPIC_OPTIONS)
 ALLOWED_LLM_TARGETS = set(TARGET_OPTIONS)
 ```
@@ -1016,7 +1016,7 @@ Create `tests/fixtures/whatsapp_harness_cases.json`:
     "input": "八歲，情緒",
     "profile": {},
     "expected_route": "local_profile_update",
-    "expected_age_groups": ["6-12歲"],
+    "expected_age_groups": ["7-12歲"],
     "expected_pain_points": ["情緒壓力"],
     "expected_allow_llm": false
   },
@@ -1150,7 +1150,7 @@ Add to `tests/test_whatsapp_handler.py`:
             issue_type="missed_profile",
             severity="medium",
             summary="八歲情緒未能識別",
-            admin_note="應抽取 6-12歲 和 情緒壓力",
+            admin_note="應抽取 7-12歲 和 情緒壓力",
             source_message_id=None,
         )
 
@@ -1313,7 +1313,7 @@ Send these messages to the bot from a test WhatsApp number:
 
 Expected:
 
-- `八歲，情緒` stores `6-12歲` and `情緒壓力`.
+- `八歲，情緒` stores `7-12歲` and `情緒壓力`.
 - `幫我揀` recommends real DSEDJ courses with official links.
 - `更多` continues the last query.
 - `推薦餐廳` gets a course-domain refusal and does not call LLM.
