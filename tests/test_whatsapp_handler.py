@@ -317,6 +317,43 @@ class WhatsAppHandlerTests(unittest.TestCase):
 
         self.assertEqual(extracted, {})
 
+    def test_llm_profile_extraction_rejects_string_false_in_domain(self):
+        handler, _sent = self.make_handler()
+
+        class FakeDeepSeekResponse:
+            status_code = 200
+            text = "ok"
+
+            def json(self):
+                return {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": json.dumps(
+                                    {
+                                        "in_domain": "false",
+                                        "age_groups": ["13-18歲"],
+                                        "confidence": 0.9,
+                                    },
+                                    ensure_ascii=False,
+                                )
+                            }
+                        }
+                    ]
+                }
+
+        with patch.dict(os.environ, {"DEEPSEEK_API_KEY": "test-key"}, clear=False):
+            with patch("whatsapp_handler.requests.post") as post:
+                post.return_value = FakeDeepSeekResponse()
+                updated = handler._update_profile_from_llm_text(
+                    "85360000000",
+                    "小朋友13歲，但其實想問天氣",
+                    {},
+                )
+
+        self.assertEqual(updated, {})
+        self.assertEqual(handler._memory.get_profile("85360000000"), {})
+
     def test_llm_profile_extraction_low_confidence_asks_clarifying_question(self):
         handler, sent = self.make_handler()
         handler._memory.save_profile("85360000000", {"pain_points": ["情緒壓力"]})
@@ -332,7 +369,7 @@ class WhatsAppHandlerTests(unittest.TestCase):
                             "message": {
                                 "content": json.dumps(
                                     {
-                                        "in_domain": True,
+                                        "in_domain": "true",
                                         "age_groups": [],
                                         "pain_points": [],
                                         "confidence": 0.2,
@@ -351,6 +388,42 @@ class WhatsAppHandlerTests(unittest.TestCase):
                 handler._handle_text_message("85360000000", "佢最近好麻煩")
 
         self.assertEqual(sent[-1][1], "小朋友幾多歲？")
+
+    def test_llm_profile_extraction_rejects_legacy_string_false_course_related(self):
+        handler, _sent = self.make_handler()
+
+        class FakeDeepSeekResponse:
+            status_code = 200
+            text = "ok"
+
+            def json(self):
+                return {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": json.dumps(
+                                    {
+                                        "is_course_related": "false",
+                                        "age_groups": ["13-18歲"],
+                                        "confidence": 0.9,
+                                    },
+                                    ensure_ascii=False,
+                                )
+                            }
+                        }
+                    ]
+                }
+
+        with patch.dict(os.environ, {"DEEPSEEK_API_KEY": "test-key"}, clear=False):
+            with patch("whatsapp_handler.requests.post") as post:
+                post.return_value = FakeDeepSeekResponse()
+                extracted = handler._llm_extract_profile_update(
+                    "85360000000",
+                    "小朋友13歲，但其實想問餐廳",
+                    {},
+                )
+
+        self.assertEqual(extracted, {})
 
     def test_greeting_does_not_use_llm_semantic_extraction(self):
         handler, sent = self.make_handler()

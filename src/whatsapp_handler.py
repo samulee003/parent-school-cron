@@ -2070,6 +2070,24 @@ class WhatsAppHandler:
             return False
         return True
 
+    @staticmethod
+    def _coerce_llm_bool(value: Any) -> Optional[bool]:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"true", "yes", "1", "是"}:
+                return True
+            if normalized in {"false", "no", "0", "否"}:
+                return False
+            return None
+        if isinstance(value, (int, float)):
+            if value == 1:
+                return True
+            if value == 0:
+                return False
+        return None
+
     def _llm_extract_profile_update(
         self,
         from_number: str,
@@ -2139,8 +2157,12 @@ class WhatsAppHandler:
         payload = self._extract_json_object(raw or "")
         if not payload:
             return {}
-        in_domain = payload.get("in_domain", payload.get("is_course_related"))
-        if in_domain is False:
+        domain_flag = None
+        if "in_domain" in payload:
+            domain_flag = self._coerce_llm_bool(payload.get("in_domain"))
+        if domain_flag is None and "is_course_related" in payload:
+            domain_flag = self._coerce_llm_bool(payload.get("is_course_related"))
+        if domain_flag is False:
             return {}
 
         valid_age_groups = set(options["age_groups"])
@@ -2180,7 +2202,7 @@ class WhatsAppHandler:
             confidence = 1.0
         clarifying_question = str(payload.get("clarifying_question", "") or "").strip()
         if (
-            in_domain is True
+            domain_flag is True
             and confidence < 0.45
             and not extracted
         ):
