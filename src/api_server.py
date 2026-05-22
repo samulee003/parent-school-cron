@@ -695,10 +695,10 @@ def _public_landing_html() -> str:
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>家長學堂 WhatsApp 課程小助手</title>
-  <meta name="description" content="透過 WhatsApp 查詢澳門家長學堂課程，按孩子年齡和關心方向取得少量官方課程連結。">
-  <meta property="og:title" content="家長學堂 WhatsApp 課程小助手">
-  <meta property="og:description" content="打開 WhatsApp，輸入「課程」即可查詢澳門家長學堂課程。">
+  <title>悅昕心理小助手阿Sa｜家長學堂 WhatsApp 課程配對</title>
+  <meta name="description" content="悅昕心理小助手阿Sa 透過 WhatsApp 協助家長查詢澳門家長學堂課程，按孩子年齡和關心方向取得少量官方課程連結。">
+  <meta property="og:title" content="悅昕心理小助手阿Sa">
+  <meta property="og:description" content="家長學堂 WhatsApp 課程小助手，打開 WhatsApp，輸入「課程」即可查詢澳門家長學堂課程。">
   <meta property="og:image" content="https://parent-school-bot.zeabur.app/whatsapp-qr.png">
   <style>
     body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #1f2933; background: #f7f7f2; }
@@ -716,7 +716,8 @@ def _public_landing_html() -> str:
 </head>
 <body>
   <main>
-    <h1>家長學堂 WhatsApp 課程小助手</h1>
+    <h1>悅昕心理小助手阿Sa</h1>
+    <p>家長學堂 WhatsApp 課程小助手。</p>
     <p>這是一個協助家長查詢澳門家長學堂課程的 WhatsApp 測試版小助手。你可以用一句自然語句描述孩子年齡和最近關心的方向，我會盡量只挑少量相關課程，並附官方報名連結。</p>
     <p>課程資料來自澳門教育及青年發展局家長學堂公開課程頁面，實際名額、時間和報名狀態以官方網站為準。</p>
     <div class="panel">
@@ -731,7 +732,7 @@ def _public_landing_html() -> str:
       </p>
       <p class="small">也可以手動加入 WhatsApp：+86 147 1494 9607，然後傳送「課程」。</p>
       <div class="copybox">__SHARE_URL__</div>
-      <p><img class="qr" src="/whatsapp-qr.png" alt="家長學堂 WhatsApp QR code"></p>
+      <p><img class="qr" src="/whatsapp-qr.png" alt="悅昕心理小助手阿Sa WhatsApp QR code"></p>
     </div>
     <div class="panel">
       <p>私隱說明</p>

@@ -469,7 +469,8 @@ class WhatsAppHandlerTests(unittest.TestCase):
                 handler._handle_text_message("85360000000", "hi")
 
         self.assertFalse(post.called)
-        self.assertIn("澳門家長學堂課程助手", sent[0][1])
+        self.assertIn("悅昕心理小助手阿Sa", sent[0][1])
+        self.assertIn("澳門家長學堂課程", sent[0][1])
 
     def test_onboarding_age_only_asks_for_concern_without_calling_deepseek(self):
         handler, sent = self.make_handler()
@@ -2860,6 +2861,7 @@ class WhatsAppHandlerTests(unittest.TestCase):
     def test_root_reports_whatsapp_first_version(self):
         result = asyncio.run(api_server.root())
 
+        self.assertIn("悅昕心理小助手阿Sa", result)
         self.assertIn("家長學堂 WhatsApp 課程小助手", result)
         self.assertIn("測試版", result)
         self.assertIn("https://wa.me/8614714949607", result)
