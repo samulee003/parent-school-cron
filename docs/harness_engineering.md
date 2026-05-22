@@ -11,7 +11,7 @@ This bot is a bounded course assistant for Macau Parent School. The model is use
 ## Routing Order
 
 1. Ingest WhatsApp event and dedupe message IDs.
-2. If media is audio, transcribe it with StepFun first.
+2. If media is audio, prefer StepFun ASR when configured, then use an approved fallback when available.
 3. Normalize text: whitespace, punctuation, simplified/traditional variants, Cantonese wording, Chinese numerals, and common English age phrases.
 4. Run local command and safety gate.
 5. Run deterministic extraction for age, topic, target, and pain points.
@@ -58,5 +58,7 @@ Every fixed production miss becomes a regression case with:
 - expected profile patch
 - expected reply intent
 - expected LLM call count
+
+Eval cases must be scrubbed or anonymized before storage or commit. Remove phone numbers, names, school names, identifiers, and unnecessary sensitive family details.
 
 The golden suite must run in `python -m unittest` without external network calls.
